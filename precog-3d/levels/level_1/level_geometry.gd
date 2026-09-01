@@ -32,6 +32,7 @@ func bake_now() -> void:
 
 func _environment() -> void:
 	var world := WorldEnvironment.new()
+	world.name = "WorldEnvironment"
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
 	env.background_color = Color(0.07, 0.08, 0.1, 1)
