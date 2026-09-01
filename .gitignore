@@ -1,0 +1,6 @@
+**/.godot/
+**/addons/godot_mcp/cache/
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
