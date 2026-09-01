@@ -1,19 +1,42 @@
 extends Node3D
-## Level 1 host scene. Geometry and simulation are added in later phases.
+## Level 1 host. Phase 2: readable diorama and observation camera.
+
+var geometry: LevelGeometry
+var camera: ObserverCamera
 
 func _ready() -> void:
-	if not has_node("Camera3D"):
-		var cam := Camera3D.new()
-		cam.name = "Camera3D"
-		cam.position = Vector3(0, 8, 12)
-		add_child(cam)
-		cam.look_at(Vector3.ZERO, Vector3.UP)
-	if not has_node("Sun"):
-		var light := DirectionalLight3D.new()
-		light.name = "Sun"
-		light.rotation_degrees = Vector3(-50, 35, 0)
-		add_child(light)
+	if has_node("World"):
+		geometry = $World as LevelGeometry
+	else:
+		geometry = LevelGeometry.new()
+		add_child(geometry)
+		geometry.build()
+		geometry.spawn_mannequin(Vector3(0, 0, 2.4), Color(0.25, 0.55, 0.95), "SCALE")
+		geometry.spawn_mannequin(Vector3(2.2, 0, 18.8), Color(0.75, 0.25, 0.22), "HIDDEN")
+		call_deferred("_bake")
+	if not has_node("Observer"):
+		camera = ObserverCamera.new()
+		camera.name = "Observer"
+		add_child(camera)
 	_ensure_overlay()
+	_hint()
+
+
+func _bake() -> void:
+	if geometry:
+		geometry.bake_now()
+
+
+func _hint() -> void:
+	if has_node("Hint"):
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "Hint"
+	add_child(layer)
+	var lab := Label.new()
+	lab.text = "RMB rotate  |  WASD pan  |  wheel zoom  |  R reset  |  F3 debug  |  Esc boot"
+	lab.position = Vector2(16, 12)
+	layer.add_child(lab)
 
 
 func _ensure_overlay() -> void:
