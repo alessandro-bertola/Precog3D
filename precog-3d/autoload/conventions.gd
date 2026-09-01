@@ -22,4 +22,4 @@ const GROUP_DOORS := "doors"
 
 const LAYER_WORLD := 1
 const LAYER_CHARACTERS := 2
-const LAYER_DOORS := 3
+const LAYER_DOORS := 4
