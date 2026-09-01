@@ -26,7 +26,7 @@ func _build_ui() -> void:
 
 	var sub := Label.new()
 	title_modulate_info(sub)
-	sub.text = "THE PLAYER DOES NOT MOVE PEOPLE.\nTHE PLAYER MOVES INFORMATION."
+	sub.text = "THE PLAYER DOES NOT MOVE PEOPLE.\nTHE PLAYER MOVES INFORMATION.\n\nWatch a future. Return. Warn. Watch again. Commit."
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(sub)
 
