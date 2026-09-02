@@ -370,16 +370,16 @@ func _photo_hold_vs_flee() -> void:
 	walker.combat_enabled = false
 	host.running = true
 	await _tick(1.6)
-	await _save_shot("precog-corridor-walk")
+	await _save_shot("movement_corridor_walk")
 	var t := 0.0
 	while t < 8.0 and not (_door_a() != null and _door_a().is_open):
 		await get_tree().physics_frame
 		t += get_physics_process_delta_time()
 	cam.set_view(Vector3(-4.0, 0.0, 18.0), 12.0, -1.1, -0.7)
 	await _tick(0.45)
-	await _save_shot("precog-door-open")
+	await _save_shot("movement_door_open")
 	await _tick(2.4)
-	await _save_shot("precog-room-a-arrive")
+	await _save_shot("movement_room_a_arrive")
 	host.running = false
 	await _clear_pawns()
 	cam.set_view(Vector3(4.0, 0.0, 20.0), 18.0, -0.85, -0.72)
@@ -395,5 +395,5 @@ func _photo_hold_vs_flee() -> void:
 	host.emit_sound(holder.global_position, 6.0, "gunshot", "noise")
 	host.running = true
 	await _tick(2.4)
-	await _save_shot("precog-hold-vs-flee")
+	await _save_shot("movement_hold_vs_flee")
 	host.running = false
