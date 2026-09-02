@@ -23,8 +23,10 @@ func _ready() -> void:
 	if _want_visual():
 		print("VISUAL MODE")
 		DebugMode.enabled = true
+		Engine.time_scale = 0.72
 		await _photo_hold_vs_flee()
-		await get_tree().create_timer(6.0).timeout
+		Engine.time_scale = 1.0
+		await get_tree().create_timer(1.2).timeout
 		get_tree().quit(0)
 		return
 	await _case_a_agent_reaches_room()
@@ -374,40 +376,48 @@ func _photo_hold_vs_flee() -> void:
 	cam.pitch = -0.75
 	add_child(cam)
 	cam.set_view(Vector3(-0.2, 0.0, 10.0), 15.0, -0.2, -0.72)
-	await get_tree().create_timer(2.5).timeout
+	await get_tree().create_timer(1.0).timeout
 	var walker := host.spawn_pawn("Walker", Pawn.Faction.AGENT, host.marker("entrance"), 0.3, host.marker("room_a"), "clear_room_a")
 	walker.role = Pawn.Role.SWEEPER
 	walker.stance = Pawn.Stance.DECISIVE
 	walker.combat_enabled = false
 	host.running = true
-	await _tick(2.0)
-	await _save_shot("verified_corridor_walk")
 	var t := 0.0
-	while t < 9.0 and not (_door_a() != null and _door_a().is_open):
+	while t < 5.0 and walker.global_position.distance_to(host.marker("door_a")) > 2.4:
 		await get_tree().physics_frame
 		t += get_physics_process_delta_time()
-	cam.set_view(Vector3(-4.0, 0.0, 18.0), 11.5, -1.05, -0.62)
-	await _tick(0.55)
-	await _save_shot("verified_door_open")
-	while t < 12.0 and walker.global_position.distance_to(host.marker("room_a")) > 1.4:
+		cam.set_view(walker.global_position + Vector3(0.4, 0, 1.2), 13.0, -0.25, -0.68)
+	await _save_shot("final_corridor_walk")
+	while t < 12.0 and not (_door_a() != null and _door_a().is_open):
 		await get_tree().physics_frame
 		t += get_physics_process_delta_time()
-	cam.set_view(Vector3(-7.2, 0.0, 18.0), 11.0, -1.2, -0.6)
+		cam.set_view(Vector3(-3.6, 0.0, 18.0), 10.5, -1.05, -0.52)
+	await _tick(0.45)
+	await _save_shot("final_door_open")
+	while t < 16.0 and walker.global_position.distance_to(host.marker("room_a")) > 1.35:
+		await get_tree().physics_frame
+		t += get_physics_process_delta_time()
+		cam.set_view(walker.global_position + Vector3(0.8, 0, 0.2), 10.0, -1.15, -0.55)
+	cam.set_view(host.marker("room_a") + Vector3(1.0, 0, 0), 10.5, -1.2, -0.58)
 	await _tick(0.35)
-	await _save_shot("verified_room_a_arrive")
+	await _save_shot("final_room_a_arrive")
 	host.running = false
 	await _clear_pawns()
-	cam.set_view(Vector3(-2.0, 0.0, 20.0), 16.0, -0.95, -0.7)
+	cam.set_view(host.marker("room_a") + Vector3(3.0, 0, 2.0), 15.0, -0.95, -0.68)
 	var runner := host.spawn_pawn("Runner", Pawn.Faction.CRIMINAL, host.marker("room_a"), 0.3, host.marker("exit"), "flee_exit")
 	runner.role = Pawn.Role.NONE
 	runner.anxiety = 0.9
 	runner.combat_enabled = false
 	host.running = true
-	await _tick(3.4)
-	await _save_shot("verified_flee_exit")
+	t = 0.0
+	while t < 5.0 and runner.global_position.distance_to(host.marker("exit")) > 8.0:
+		await get_tree().physics_frame
+		t += get_physics_process_delta_time()
+		cam.set_view(runner.global_position + Vector3(1.5, 0, 1.0), 13.5, -0.9, -0.62)
+	await _save_shot("final_flee_exit")
 	host.running = false
 	await _clear_pawns()
-	cam.set_view(Vector3(12.4, 0.0, 18.4), 10.0, -0.9, -0.55)
+	cam.set_view(Vector3(13.0, 0.0, 18.4), 8.0, -2.4, -0.72)
 	var civ := host.spawn_pawn(Conventions.CIVILIAN, Pawn.Faction.CIVILIAN, host.marker("hostage"), 0.8, host.marker("hostage"), "held")
 	civ.role = Pawn.Role.HOSTAGE
 	var holder := host.spawn_pawn("Keeper", Pawn.Faction.CRIMINAL, host.marker("holder"), 0.35, host.marker("holder"), "stay_on_hostage")
@@ -416,6 +426,6 @@ func _photo_hold_vs_flee() -> void:
 	holder.combat_enabled = false
 	host.emit_sound(holder.global_position, 6.0, "gunshot", "noise")
 	host.running = true
-	await _tick(2.2)
-	await _save_shot("verified_hold_hostage")
+	await _tick(1.8)
+	await _save_shot("final_hold_hostage")
 	host.running = false

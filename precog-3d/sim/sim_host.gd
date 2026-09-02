@@ -242,11 +242,11 @@ func _replace_door_panels() -> void:
 	var a := Door.new()
 	a.name = "DoorA"
 	geometry.add_child(a)
-	a.global_position = marker("door_a")
+	a.global_position = marker("door_a") + Vector3(0, 0, -0.85)
 	var b := Door.new()
 	b.name = "DoorB"
 	geometry.add_child(b)
-	b.global_position = marker("door_b")
+	b.global_position = marker("door_b") + Vector3(0, 0, -0.85)
 
 
 func _spawn_cast() -> void:

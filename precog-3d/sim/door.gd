@@ -33,6 +33,7 @@ func _ready() -> void:
 	mat.roughness = 0.7
 	_mesh.material_override = mat
 	_body.add_child(_mesh)
+	_body.position = Vector3(0, 0, 0.85)
 	add_child(_body)
 	if start_open:
 		_set_open_instant(true)
