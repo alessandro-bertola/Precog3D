@@ -42,7 +42,10 @@ var liberated: bool = false
 var hold_name: String = ""
 var post_pos: Vector3 = Vector3.INF
 var check_timer: float = 0.0
+var combat_enabled: bool = true
+var doors_opened: int = 0
 var _heard_keys: Dictionary = {}
+var _door_wait: Door = null
 
 var _nav: NavigationAgent3D
 var _label: Label3D
@@ -71,6 +74,7 @@ func _ready() -> void:
 	floor_snap_length = 0.35
 	_build_visual()
 	_build_nav()
+	call_deferred("_bind_nav_map")
 
 
 func _build_nav() -> void:
@@ -90,6 +94,16 @@ func _build_nav() -> void:
 	_nav.avoidance_priority = 0.55 if faction == Faction.AGENT else 0.45
 	_nav.velocity_computed.connect(_on_nav_velocity)
 	add_child(_nav)
+
+
+func _bind_nav_map() -> void:
+	if not is_inside_tree() or _nav == null:
+		return
+	_nav.set_navigation_map(get_world_3d().navigation_map)
+	if goal_pos.x != INF:
+		var dest := goal_pos
+		dest.y = global_position.y
+		_nav.target_position = dest
 
 
 func _build_visual() -> void:
@@ -141,11 +155,14 @@ func _color() -> Color:
 
 
 func set_goal(pos: Vector3, text: String) -> void:
+	var same := goal_pos.x != INF and goal_pos.distance_to(pos) < 0.18 and goal_text == text
 	goal_pos = pos
 	goal_text = text
 	if spawn_goal.x == INF:
 		spawn_goal = pos
 		spawn_goal_text = text
+	if same:
+		return
 	_arrived = false
 	if _nav != null and not downed and pos.x != INF:
 		var dest := pos
@@ -267,36 +284,28 @@ func _decide_agent() -> void:
 
 func _decide_criminal() -> void:
 	_maybe_open_nearby()
-	var saw := _visible_enemy()
-	if saw:
-		anxiety = clampf(anxiety + 0.2, 0.0, 1.0)
-		current_action = "combat"
-		if role == Role.HOLDER:
-			_hold_on_civilian()
-			return
-		if role == Role.POSTED:
-			set_goal(_post(), "hold_post")
-			return
-		if _should_flee():
-			set_goal(_marker("exit"), "flee_exit")
-			current_action = "flee"
-			return
-		set_goal(saw.global_position, "engage")
-		return
 	if _should_flee():
 		set_goal(_marker("exit"), "flee_exit")
 		current_action = "flee"
 		_maybe_open_nearby()
 		return
+	var saw := _visible_enemy()
+	if saw:
+		anxiety = clampf(anxiety + 0.2, 0.0, 1.0)
 	if role == Role.HOLDER:
 		_hold_on_civilian()
-		current_action = "hold_hostage"
+		current_action = "hold_hostage" if not saw else "hold_alert"
 		return
 	if role == Role.POSTED:
 		set_goal(_post(), "hold_post")
-		current_action = "guard"
+		_face(_marker("door_a"))
+		current_action = "alert_hold" if anxiety >= 0.3 or saw else "guard"
 		return
-	current_action = "wait"
+	if saw:
+		set_goal(saw.global_position, "engage")
+		current_action = "combat"
+		return
+	current_action = "alert_hold" if anxiety >= 0.3 else "wait"
 
 
 func _decide_civilian() -> void:
@@ -321,6 +330,13 @@ func _decide_civilian() -> void:
 		var dest := escort.global_position
 		if dest.distance_to(_marker("exit")) < 2.5:
 			dest = _marker("exit")
+		else:
+			var away := global_position - escort.global_position
+			away.y = 0.0
+			if away.length() < 0.05:
+				away = Vector3(0.85, 0, 0)
+			if away.length() < 0.85:
+				dest = escort.global_position + away.normalized() * 0.9
 		set_goal(dest, "follow_agent")
 		current_action = "follow"
 		return
@@ -336,17 +352,26 @@ func _hold_on_civilian() -> void:
 			set_goal(_marker("exit"), "flee_exit")
 			current_action = "flee"
 		return
-	var stand := civ.global_position + (global_position - civ.global_position).normalized() * 0.95
+	var offset := global_position - civ.global_position
+	offset.y = 0.0
+	if offset.length() < 0.05:
+		offset = Vector3(0.9, 0, 0)
+	var stand := civ.global_position + offset.normalized() * 0.95
 	if global_position.distance_to(civ.global_position) > 1.35:
 		set_goal(stand, "stay_on_hostage")
 	else:
 		goal_pos = global_position
 		goal_text = "stay_on_hostage"
 		_arrived = true
+	_face(civ.global_position)
 
 
 func _should_flee() -> bool:
-	if role == Role.HOLDER and _find_named(Conventions.CIVILIAN) and not _find_named(Conventions.CIVILIAN).downed:
+	if role == Role.HOLDER:
+		var civ := _find_named(hold_name) if hold_name != "" else _find_named(Conventions.CIVILIAN)
+		if civ and not civ.downed:
+			return false
+	if role == Role.POSTED and _has_living_partner():
 		return false
 	if anxiety < 0.6:
 		return false
@@ -426,10 +451,14 @@ func _post() -> Vector3:
 func _wants_move() -> bool:
 	if downed:
 		return false
-	if current_action in ["wait", "guard", "hold_cautious", "downed", "held", "hold_hostage", "open_door"]:
+	if current_action in ["wait", "guard", "alert_hold", "hold_cautious", "downed", "held", "hold_hostage", "hold_alert", "open_door", "wait_door"]:
+		if current_action in ["guard", "alert_hold"]:
+			var to_post := _post() - global_position
+			to_post.y = 0.0
+			return to_post.length() > ARRIVE
 		if current_action == "hold_hostage" and goal_text == "stay_on_hostage" and _arrived:
 			return false
-		if current_action in ["wait", "guard", "hold_cautious", "held", "open_door"]:
+		if current_action in ["wait", "hold_cautious", "held", "open_door", "wait_door", "hold_alert"]:
 			return false
 	if goal_pos.x == INF:
 		return false
@@ -452,11 +481,21 @@ func _move(delta: float) -> void:
 	velocity.y -= GRAVITY * delta
 	var door := _blocking_door()
 	if door != null:
+		if _should_yield_door(door):
+			current_action = "wait_door"
+			_brake()
+			move_and_slide()
+			return
 		current_action = "open_door"
-		door.request_open(self)
+		if not door.is_open and not door.busy:
+			door.request_open(self)
+			doors_opened += 1
+		_door_wait = door
 		_brake()
 		move_and_slide()
 		return
+	if _door_wait != null and _door_wait.is_open:
+		_door_wait = null
 	if not _wants_move():
 		_brake()
 		move_and_slide()
@@ -476,16 +515,13 @@ func _move(delta: float) -> void:
 	if _nav:
 		_nav.target_position = dest
 		_nav.max_speed = _current_speed()
-	var steer := to_goal.normalized()
-	if _nav != null:
-		var next := _nav.get_next_path_position()
-		var via := next - global_position
-		via.y = 0.0
-		if via.length() >= 0.08:
-			steer = via.normalized()
-			blocked_reason = ""
-		elif sim_time_ok():
-			blocked_reason = "no_path"
+	var steer := _steer_dir(to_goal)
+	if steer.length() < 0.05:
+		blocked_reason = "no_path"
+		_brake()
+		move_and_slide()
+		return
+	blocked_reason = ""
 	var desired := steer * _current_speed()
 	if _nav:
 		_nav.set_velocity(desired)
@@ -496,12 +532,54 @@ func _move(delta: float) -> void:
 	move_and_slide()
 
 
+func _steer_dir(to_goal: Vector3) -> Vector3:
+	var fallback := to_goal.normalized() if to_goal.length() > 0.05 else Vector3.ZERO
+	if _nav == null:
+		return fallback if _clear_step(fallback) else Vector3.ZERO
+	var path := _nav.get_current_navigation_path()
+	var next := _nav.get_next_path_position()
+	var via := next - global_position
+	via.y = 0.0
+	var has_path := path.size() >= 2
+	if has_path and via.length() >= 0.08:
+		return via.normalized()
+	if _clear_step(fallback):
+		return fallback
+	return Vector3.ZERO
+
+
+func _clear_step(dir: Vector3) -> bool:
+	if dir.length() < 0.04:
+		return false
+	var space := get_world_3d().direct_space_state
+	var from := global_position + Vector3.UP * 0.55
+	var to := from + dir.normalized() * 0.58
+	var q := PhysicsRayQueryParameters3D.create(from, to, Conventions.LAYER_WORLD)
+	q.collide_with_areas = false
+	q.exclude = [get_rid()]
+	var hit := space.intersect_ray(q)
+	if hit.is_empty():
+		return true
+	var n: Node = hit.get("collider")
+	while n != null:
+		if str(n.name).begins_with("floor_"):
+			return true
+		n = n.get_parent()
+	return false
+
+
+func _face(at: Vector3) -> void:
+	var look := Vector3(at.x, global_position.y, at.z)
+	if look.distance_to(global_position) < 0.08:
+		return
+	look_at(look, Vector3.UP)
+
+
 func _direct_step(use: Vector3) -> void:
 	velocity.x = use.x
 	velocity.z = use.z
 	if Vector3(use.x, 0, use.z).length() > FACE_SPEED:
-		var look := global_position + Vector3(use.x, 0, use.z)
-		look_at(Vector3(look.x, global_position.y, look.z), Vector3.UP)
+		_face(global_position + Vector3(use.x, 0, use.z))
 
 
 func _brake() -> void:
@@ -512,16 +590,19 @@ func _brake() -> void:
 
 
 func _blocking_door() -> Door:
-	if _nav == null:
-		return null
 	var ahead := -global_transform.basis.z
-	if not _nav.is_navigation_finished():
+	if _nav != null:
 		var next := _nav.get_next_path_position() - global_position
 		next.y = 0.0
 		if next.length() > 0.05:
 			ahead = next.normalized()
+	if goal_pos.x != INF:
+		var to_goal := goal_pos - global_position
+		to_goal.y = 0.0
+		if to_goal.length() > 0.05 and ahead.dot(to_goal.normalized()) < 0.2:
+			ahead = to_goal.normalized()
 	var from := global_position + Vector3(0, 0.9, 0)
-	var q := PhysicsRayQueryParameters3D.create(from, from + ahead * 1.15)
+	var q := PhysicsRayQueryParameters3D.create(from, from + ahead * 1.25)
 	q.collision_mask = Conventions.LAYER_DOORS
 	q.exclude = [get_rid()]
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)
@@ -531,17 +612,33 @@ func _blocking_door() -> Door:
 	while n:
 		if n is Door:
 			var d := n as Door
-			if not d.is_open and not d.busy:
+			if not d.is_open:
 				return d
 			return null
 		n = n.get_parent()
 	return null
 
 
+func _should_yield_door(door: Door) -> bool:
+	var my_d := global_position.distance_to(door.global_position)
+	for p in get_tree().get_nodes_in_group(Conventions.GROUP_PAWNS):
+		if p == self or not (p is Pawn):
+			continue
+		var other := p as Pawn
+		if other.downed:
+			continue
+		if other.global_position.distance_to(door.global_position) + 0.25 < my_d:
+			if other.current_action in ["open_door", "wait_door"] or other.global_position.distance_to(door.global_position) < 1.6:
+				return true
+	return false
+
+
 func _maybe_open_nearby() -> void:
 	var d := _blocking_door()
 	if d:
-		d.request_open(self)
+		if not _should_yield_door(d) and not d.is_open and not d.busy:
+			d.request_open(self)
+			doors_opened += 1
 		return
 	for node in get_tree().get_nodes_in_group(Conventions.GROUP_DOORS):
 		if not (node is Door):
@@ -549,12 +646,13 @@ func _maybe_open_nearby() -> void:
 		var door := node as Door
 		if door.is_open or door.busy:
 			continue
-		if global_position.distance_to(door.global_position) < 1.4:
+		if global_position.distance_to(door.global_position) < 1.4 and not _should_yield_door(door):
 			door.request_open(self)
+			doors_opened += 1
 
 
 func _try_shoot() -> void:
-	if downed or fire_cd > 0.0:
+	if not combat_enabled or downed or fire_cd > 0.0:
 		return
 	if faction == Faction.CIVILIAN:
 		return
@@ -604,7 +702,8 @@ func take_hit(amount: float, _from: Pawn) -> void:
 		downed = true
 		current_action = "downed"
 		goal_text = "incapacitated"
-		collision_layer = 0
+		collision_layer = Conventions.LAYER_CHARACTERS
+		collision_mask = Conventions.LAYER_WORLD
 		if _nav:
 			_nav.avoidance_enabled = false
 			_nav.set_velocity(Vector3.ZERO)
@@ -831,7 +930,8 @@ func apply_snapshot(data: Dictionary) -> void:
 	liberated = data.get("liberated", false)
 	hold_name = data.get("hold_name", "")
 	post_pos = data.get("post_pos", Vector3.INF)
-	collision_layer = 0 if downed else Conventions.LAYER_CHARACTERS
+	collision_layer = Conventions.LAYER_CHARACTERS
+	collision_mask = Conventions.LAYER_WORLD if downed else (Conventions.LAYER_WORLD | Conventions.LAYER_DOORS | Conventions.LAYER_CHARACTERS)
 	knowledge = KnowledgeStore.new()
 	_heard_keys.clear()
 	for f in data["facts"]:
