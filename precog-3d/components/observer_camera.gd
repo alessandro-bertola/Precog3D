@@ -97,6 +97,14 @@ func reset_view() -> void:
 	_apply()
 
 
+func set_view(p: Vector3, dist: float, y: float = -0.55, pit: float = -0.78) -> void:
+	pivot = p
+	distance = dist
+	yaw = y
+	pitch = pit
+	_apply()
+
+
 func _apply() -> void:
 	var offset := Vector3(
 		sin(yaw) * cos(pitch),

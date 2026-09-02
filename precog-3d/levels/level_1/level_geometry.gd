@@ -11,8 +11,9 @@ func build() -> void:
 	name = "World"
 	var nmesh := NavigationMesh.new()
 	nmesh.geometry_parsed_geometry_type = NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS
-	nmesh.agent_radius = 0.38
-	nmesh.agent_height = 1.7
+	nmesh.geometry_collision_mask = Conventions.LAYER_WORLD
+	nmesh.agent_radius = 0.5
+	nmesh.agent_height = 1.75
 	nmesh.agent_max_climb = 0.25
 	nmesh.agent_max_slope = 45.0
 	nmesh.cell_size = 0.25
@@ -27,7 +28,20 @@ func build() -> void:
 
 
 func bake_now() -> void:
-	bake_navigation_mesh()
+	bake_navigation_mesh(false)
+
+
+func bake_for_play() -> void:
+	var map := get_navigation_map()
+	NavigationServer3D.map_set_cell_size(map, 0.25)
+	NavigationServer3D.map_set_cell_height(map, 0.25)
+	bake_navigation_mesh(false)
+
+
+func polygon_count() -> int:
+	if navigation_mesh == null:
+		return 0
+	return navigation_mesh.get_polygon_count()
 
 
 func _environment() -> void:
@@ -110,10 +124,13 @@ func _cover() -> void:
 
 
 func _door_panels() -> void:
+	# Markers only. Door colliders must not be baked into the navmesh or
+	# agents path-find into a sealed doorway and jitter against the panel.
 	markers["door_a"] = Vector3(-4.1, 1.2, 18.05)
-	_box(Vector3(-4.1, 1.2, 18.05), Vector3(0.14, 2.4, 1.65), Color(0.74, 0.46, 0.16), "door_a_panel")
 	markers["door_b"] = Vector3(10.1, 1.2, 18.05)
-	_box(Vector3(10.1, 1.2, 18.05), Vector3(0.14, 2.4, 1.65), Color(0.74, 0.46, 0.16), "door_b_panel")
+	markers["post_a"] = Vector3(-5.4, 0, 18.05)
+	markers["hostage"] = Vector3(13.0, 0, 18.4)
+	markers["holder"] = Vector3(12.1, 0, 18.4)
 
 
 func _labels() -> void:
