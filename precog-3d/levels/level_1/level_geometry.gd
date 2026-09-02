@@ -12,12 +12,12 @@ func build() -> void:
 	var nmesh := NavigationMesh.new()
 	nmesh.geometry_parsed_geometry_type = NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS
 	nmesh.geometry_collision_mask = Conventions.LAYER_WORLD
-	nmesh.agent_radius = 0.34
-	nmesh.agent_height = 1.7
+	nmesh.agent_radius = 0.5
+	nmesh.agent_height = 1.75
 	nmesh.agent_max_climb = 0.25
 	nmesh.agent_max_slope = 45.0
-	nmesh.cell_size = 0.2
-	nmesh.cell_height = 0.2
+	nmesh.cell_size = 0.25
+	nmesh.cell_height = 0.25
 	navigation_mesh = nmesh
 	_environment()
 	_floors()
@@ -32,7 +32,16 @@ func bake_now() -> void:
 
 
 func bake_for_play() -> void:
+	var map := get_navigation_map()
+	NavigationServer3D.map_set_cell_size(map, 0.25)
+	NavigationServer3D.map_set_cell_height(map, 0.25)
 	bake_navigation_mesh(false)
+
+
+func polygon_count() -> int:
+	if navigation_mesh == null:
+		return 0
+	return navigation_mesh.get_polygon_count()
 
 
 func _environment() -> void:

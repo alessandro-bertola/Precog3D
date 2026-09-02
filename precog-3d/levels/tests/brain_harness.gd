@@ -17,8 +17,9 @@ func _ready() -> void:
 	add_child(host)
 	host.setup(geo, false)
 	geo.bake_for_play()
-	await get_tree().physics_frame
-	await get_tree().physics_frame
+	_lines.append("nav polygons=%d" % geo.polygon_count())
+	for i in 6:
+		await get_tree().physics_frame
 	await _case_a_agent_reaches_room()
 	await _clear_pawns()
 	await _case_b_hostage_then_follow()
@@ -31,7 +32,10 @@ func _ready() -> void:
 	print(summary)
 	for line in _lines:
 		print(line)
-	get_tree().quit(1 if failed > 0 else 0)
+	if DisplayServer.get_name() == "headless":
+		get_tree().quit(1 if failed > 0 else 0)
+		return
+	await _photo_hold_vs_flee()
 
 
 func _clear_pawns() -> void:
@@ -70,10 +74,17 @@ func _case_a_agent_reaches_room() -> void:
 	agent.role = Pawn.Role.SWEEPER
 	agent.stance = Pawn.Stance.DECISIVE
 	await get_tree().physics_frame
+	await get_tree().physics_frame
+	var map := geo.get_navigation_map()
+	_lines.append("A closest start=%s dest=%s" % [
+		str(NavigationServer3D.map_get_closest_point(map, start)),
+		str(NavigationServer3D.map_get_closest_point(map, dest))
+	])
 	var stuck := 0.0
 	var last := agent.global_position
 	host.running = true
 	var t := 0.0
+	var dumped := false
 	while t < 18.0:
 		await get_tree().physics_frame
 		var dt := get_physics_process_delta_time()
@@ -85,6 +96,9 @@ func _case_a_agent_reaches_room() -> void:
 			stuck += dt
 		else:
 			stuck = 0.0
+		if not dumped and t > 0.8:
+			dumped = true
+			_lines.append("A nav %s vel=%s" % [agent.debug_nav(), str(agent.velocity)])
 		if agent.global_position.distance_to(dest) <= 1.1:
 			break
 	host.running = false
@@ -127,7 +141,7 @@ func _case_c_scared_criminal_exits() -> void:
 	var d0 := cr.global_position.distance_to(host.marker("exit"))
 	await _tick(6.0)
 	var d1 := cr.global_position.distance_to(host.marker("exit"))
-	_ok("C_flees_exit", d1 < d0 - 1.5 or cr.current_action == "flee", "d0=%.2f d1=%.2f action=%s" % [d0, d1, cr.current_action])
+	_ok("C_flees_exit", d1 < d0 - 1.5, "d0=%.2f d1=%.2f action=%s" % [d0, d1, cr.current_action])
 
 
 func _case_d_holder_stays() -> void:
@@ -144,3 +158,20 @@ func _case_d_holder_stays() -> void:
 	await _tick(1.6)
 	var dist := holder.global_position.distance_to(civ.global_position)
 	_ok("D_holder_stays", dist <= 1.8 and holder.current_action != "flee", "dist=%.2f action=%s anxiety=%.2f" % [dist, holder.current_action, holder.anxiety])
+
+
+func _photo_hold_vs_flee() -> void:
+	await _clear_pawns()
+	var cam := ObserverCamera.new()
+	cam.name = "Observer"
+	add_child(cam)
+	var civ := host.spawn_pawn(Conventions.CIVILIAN, Pawn.Faction.CIVILIAN, host.marker("hostage"), 0.8, host.marker("hostage"), "held")
+	civ.role = Pawn.Role.HOSTAGE
+	var holder := host.spawn_pawn("Keeper", Pawn.Faction.CRIMINAL, host.marker("holder"), 0.35, host.marker("holder"), "stay_on_hostage")
+	holder.role = Pawn.Role.HOLDER
+	holder.hold_name = Conventions.CIVILIAN
+	var runner := host.spawn_pawn("Runner", Pawn.Faction.CRIMINAL, host.marker("room_a"), 0.3, host.marker("exit"), "flee_exit")
+	runner.role = Pawn.Role.NONE
+	runner.anxiety = 0.9
+	host.emit_sound(holder.global_position, 6.0, "gunshot", "noise")
+	host.running = true

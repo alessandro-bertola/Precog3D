@@ -42,6 +42,7 @@ var liberated: bool = false
 var hold_name: String = ""
 var post_pos: Vector3 = Vector3.INF
 var check_timer: float = 0.0
+var _heard_keys: Dictionary = {}
 
 var _nav: NavigationAgent3D
 var _label: Label3D
@@ -198,12 +199,17 @@ func _sense() -> void:
 			knowledge.mark_lost(other.display_name)
 	for ev in _bus_sounds():
 		var dist := global_position.distance_to(ev.pos)
-		if dist <= ev.radius:
-			var noisy: Vector3 = ev.pos + Vector3(randf_range(-1.2, 1.2), 0, randf_range(-1.2, 1.2)) * (dist / maxf(ev.radius, 0.1))
-			knowledge.hear(ev.src, noisy, now)
-			if ev.kind == "gunshot":
-				gunshots_heard += 1
-				anxiety = clampf(anxiety + 0.34, 0.0, 1.0)
+		if dist > ev.radius:
+			continue
+		var key := "%s_%.3f_%s" % [str(ev.src), float(ev.t), str(ev.kind)]
+		if _heard_keys.has(key):
+			continue
+		_heard_keys[key] = true
+		var noisy: Vector3 = ev.pos + Vector3(randf_range(-1.2, 1.2), 0, randf_range(-1.2, 1.2)) * (dist / maxf(ev.radius, 0.1))
+		knowledge.hear(ev.src, noisy, now)
+		if ev.kind == "gunshot":
+			gunshots_heard += 1
+			anxiety = clampf(anxiety + 0.34, 0.0, 1.0)
 
 
 func _decide() -> void:
@@ -457,9 +463,6 @@ func _move(delta: float) -> void:
 		return
 	var dest := goal_pos
 	dest.y = global_position.y
-	if _nav:
-		_nav.target_position = dest
-		_nav.max_speed = _current_speed()
 	var to_goal := dest - global_position
 	to_goal.y = 0.0
 	if to_goal.length() <= ARRIVE:
@@ -470,29 +473,24 @@ func _move(delta: float) -> void:
 		move_and_slide()
 		return
 	_arrived = false
-	if _nav == null:
-		_direct_step(to_goal.normalized() * _current_speed())
-		move_and_slide()
-		return
-	if _nav.is_navigation_finished():
-		_arrived = true
-		_brake()
-		move_and_slide()
-		return
-	var next := _nav.get_next_path_position()
-	var dir := next - global_position
-	dir.y = 0.0
-	if dir.length() < 0.04:
-		blocked_reason = "no_path" if sim_time_ok() else ""
-		_brake()
-		move_and_slide()
-		return
-	blocked_reason = ""
-	dir = dir.normalized()
-	var desired := dir * _current_speed()
-	_nav.set_velocity(desired)
+	if _nav:
+		_nav.target_position = dest
+		_nav.max_speed = _current_speed()
+	var steer := to_goal.normalized()
+	if _nav != null:
+		var next := _nav.get_next_path_position()
+		var via := next - global_position
+		via.y = 0.0
+		if via.length() >= 0.08:
+			steer = via.normalized()
+			blocked_reason = ""
+		elif sim_time_ok():
+			blocked_reason = "no_path"
+	var desired := steer * _current_speed()
+	if _nav:
+		_nav.set_velocity(desired)
 	var use := desired
-	if _has_safe and _safe_vel.length() > 0.02:
+	if _nav and _has_safe and _safe_vel.length() > 0.05:
 		use = _safe_vel
 	_direct_step(use)
 	move_and_slide()
@@ -731,6 +729,20 @@ func sim_time_ok() -> bool:
 	return _time() > 0.5
 
 
+func debug_nav() -> String:
+	if _nav == null:
+		return "no-nav"
+	var path := _nav.get_current_navigation_path()
+	return "fin=%s reach=%s path=%d next=%s goal=%s pos=%s" % [
+		_nav.is_navigation_finished(),
+		_nav.is_target_reachable(),
+		path.size(),
+		_nav.get_next_path_position(),
+		goal_pos,
+		global_position
+	]
+
+
 func _role_tag() -> String:
 	match role:
 		Role.POSTED:
@@ -821,6 +833,7 @@ func apply_snapshot(data: Dictionary) -> void:
 	post_pos = data.get("post_pos", Vector3.INF)
 	collision_layer = 0 if downed else Conventions.LAYER_CHARACTERS
 	knowledge = KnowledgeStore.new()
+	_heard_keys.clear()
 	for f in data["facts"]:
 		var fact := KnowledgeStore.Fact.new()
 		fact.id = f["id"]
@@ -832,6 +845,8 @@ func apply_snapshot(data: Dictionary) -> void:
 		knowledge._facts[fact.id] = fact
 	_arrived = false
 	_has_safe = false
+	if _mesh and _mesh.material_override is StandardMaterial3D:
+		(_mesh.material_override as StandardMaterial3D).albedo_color = Color(0.35, 0.35, 0.35) if downed else _color()
 	if _nav:
 		_nav.avoidance_enabled = not downed
 		if not downed and goal_pos.x != INF:
@@ -844,6 +859,7 @@ func reset_spawn() -> void:
 	downed = false
 	collision_layer = Conventions.LAYER_CHARACTERS
 	knowledge = KnowledgeStore.new()
+	_heard_keys.clear()
 	last_radio_time = -999.0
 	fire_cd = 0.0
 	blocked_reason = ""

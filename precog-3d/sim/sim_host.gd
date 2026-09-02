@@ -241,12 +241,12 @@ func _replace_door_panels() -> void:
 		geometry.get_node("door_b_panel").queue_free()
 	var a := Door.new()
 	a.name = "DoorA"
-	a.global_position = marker("door_a")
 	geometry.add_child(a)
+	a.global_position = marker("door_a")
 	var b := Door.new()
 	b.name = "DoorB"
-	b.global_position = marker("door_b")
 	geometry.add_child(b)
+	b.global_position = marker("door_b")
 
 
 func _spawn_cast() -> void:
