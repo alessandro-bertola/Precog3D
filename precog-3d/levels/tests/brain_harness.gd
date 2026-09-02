@@ -20,6 +20,10 @@ func _ready() -> void:
 	_lines.append("nav polygons=%d" % geo.polygon_count())
 	for i in 6:
 		await get_tree().physics_frame
+	if OS.get_cmdline_user_args().has("visual"):
+		await _photo_hold_vs_flee()
+		get_tree().quit(0)
+		return
 	await _case_a_agent_reaches_room()
 	await _clear_pawns()
 	await _case_a2_two_through_door()
@@ -359,27 +363,26 @@ func _photo_hold_vs_flee() -> void:
 	cam.yaw = -0.35
 	cam.pitch = -0.75
 	add_child(cam)
+	cam.set_view(Vector3(-0.2, 0.0, 10.0), 15.0, -0.2, -0.72)
 	var walker := host.spawn_pawn("Walker", Pawn.Faction.AGENT, host.marker("entrance"), 0.3, host.marker("room_a"), "clear_room_a")
 	walker.role = Pawn.Role.SWEEPER
 	walker.stance = Pawn.Stance.DECISIVE
 	walker.combat_enabled = false
 	host.running = true
-	await _tick(1.4)
+	await _tick(1.6)
 	await _save_shot("precog-corridor-walk")
 	var t := 0.0
 	while t < 8.0 and not (_door_a() != null and _door_a().is_open):
 		await get_tree().physics_frame
 		t += get_physics_process_delta_time()
-	cam.pivot = Vector3(-4.0, 0.0, 18.0)
-	cam.distance = 12.0
-	await _tick(0.35)
+	cam.set_view(Vector3(-4.0, 0.0, 18.0), 12.0, -1.1, -0.7)
+	await _tick(0.45)
 	await _save_shot("precog-door-open")
-	await _tick(2.2)
+	await _tick(2.4)
 	await _save_shot("precog-room-a-arrive")
 	host.running = false
 	await _clear_pawns()
-	cam.pivot = Vector3(4.0, 0.0, 20.0)
-	cam.distance = 18.0
+	cam.set_view(Vector3(4.0, 0.0, 20.0), 18.0, -0.85, -0.72)
 	var civ := host.spawn_pawn(Conventions.CIVILIAN, Pawn.Faction.CIVILIAN, host.marker("hostage"), 0.8, host.marker("hostage"), "held")
 	civ.role = Pawn.Role.HOSTAGE
 	var holder := host.spawn_pawn("Keeper", Pawn.Faction.CRIMINAL, host.marker("holder"), 0.35, host.marker("holder"), "stay_on_hostage")
