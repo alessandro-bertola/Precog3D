@@ -539,21 +539,35 @@ func _path_ahead() -> Vector3:
 	if _nav == null:
 		return Vector3.ZERO
 	var path := _nav.get_current_navigation_path()
-	var pick := Vector3.ZERO
+	if path.is_empty():
+		var via := _nav.get_next_path_position() - global_position
+		via.y = 0.0
+		return via if via.length() >= 0.08 else Vector3.ZERO
+	var best_i := 0
+	var best_d := 999.0
 	for i in path.size():
+		var to_pt: Vector3 = path[i] - global_position
+		to_pt.y = 0.0
+		var dist := to_pt.length()
+		if dist < best_d:
+			best_d = dist
+			best_i = i
+	var goal_flat := Vector3.ZERO
+	if goal_pos.x != INF:
+		goal_flat = goal_pos - global_position
+		goal_flat.y = 0.0
+	for i in range(best_i, path.size()):
 		var d: Vector3 = path[i] - global_position
 		d.y = 0.0
 		if d.length() < 0.30:
 			continue
-		pick = d
-		if d.length() >= 0.90:
-			break
-	if pick.length() >= 0.08:
-		return pick
-	var via := _nav.get_next_path_position() - global_position
-	via.y = 0.0
-	if via.length() >= 0.08:
-		return via
+		if goal_flat.length() > 0.5 and d.normalized().dot(goal_flat.normalized()) < -0.2:
+			continue
+		return d
+	var last: Vector3 = path[path.size() - 1] - global_position
+	last.y = 0.0
+	if last.length() >= 0.08:
+		return last
 	return Vector3.ZERO
 
 
