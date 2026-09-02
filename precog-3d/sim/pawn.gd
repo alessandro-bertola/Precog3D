@@ -79,8 +79,8 @@ func _ready() -> void:
 
 func _build_nav() -> void:
 	_nav = NavigationAgent3D.new()
-	_nav.path_desired_distance = 0.32
-	_nav.target_desired_distance = ARRIVE
+	_nav.path_desired_distance = 0.90
+	_nav.target_desired_distance = 0.90
 	_nav.radius = 0.36
 	_nav.height = 1.7
 	_nav.max_speed = move_speed
@@ -535,22 +535,35 @@ func _move(delta: float) -> void:
 	move_and_slide()
 
 
+func _path_ahead() -> Vector3:
+	if _nav == null:
+		return Vector3.ZERO
+	var path := _nav.get_current_navigation_path()
+	var pick := Vector3.ZERO
+	for i in path.size():
+		var d: Vector3 = path[i] - global_position
+		d.y = 0.0
+		if d.length() < 0.30:
+			continue
+		pick = d
+		if d.length() >= 0.90:
+			break
+	if pick.length() >= 0.08:
+		return pick
+	var via := _nav.get_next_path_position() - global_position
+	via.y = 0.0
+	if via.length() >= 0.08:
+		return via
+	return Vector3.ZERO
+
+
 func _steer_dir(to_goal: Vector3) -> Vector3:
 	var fallback := to_goal.normalized() if to_goal.length() > 0.05 else Vector3.ZERO
-	if _nav == null:
-		return fallback if _clear_step(fallback) else Vector3.ZERO
-	var path := _nav.get_current_navigation_path()
-	var next := _nav.get_next_path_position()
-	var via := next - global_position
-	via.y = 0.0
-	if path.size() >= 2 and via.length() >= 0.08:
-		return via.normalized()
-	if via.length() >= 0.08 and _clear_step(via):
-		return via.normalized()
+	var ahead := _path_ahead()
+	if ahead.length() >= 0.08:
+		return ahead.normalized()
 	if _clear_step(fallback):
 		return fallback
-	if path.size() >= 2 and via.length() >= 0.04:
-		return via.normalized()
 	return Vector3.ZERO
 
 
@@ -597,11 +610,9 @@ func _brake() -> void:
 
 func _blocking_door() -> Door:
 	var ahead := -global_transform.basis.z
-	if _nav != null:
-		var next := _nav.get_next_path_position() - global_position
-		next.y = 0.0
-		if next.length() > 0.05:
-			ahead = next.normalized()
+	var path_dir := _path_ahead()
+	if path_dir.length() > 0.05:
+		ahead = path_dir.normalized()
 	var from := global_position + Vector3(0, 0.9, 0)
 	var q := PhysicsRayQueryParameters3D.create(from, from + ahead * 1.25)
 	q.collision_mask = Conventions.LAYER_DOORS
