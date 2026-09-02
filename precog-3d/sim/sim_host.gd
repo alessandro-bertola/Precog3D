@@ -32,11 +32,12 @@ func _ready() -> void:
 	add_child(sfx)
 
 
-func setup(geo: LevelGeometry) -> void:
+func setup(geo: LevelGeometry, spawn_cast: bool = true) -> void:
 	geometry = geo
 	_seed_rng()
 	_replace_door_panels()
-	_spawn_cast()
+	if spawn_cast:
+		_spawn_cast()
 	capture_snapshot()
 	running = false
 	mode = Mode.PRESENT
@@ -249,18 +250,26 @@ func _replace_door_panels() -> void:
 
 
 func _spawn_cast() -> void:
-	_mk(Conventions.AGENT_A, Pawn.Faction.AGENT, marker("entrance") + Vector3(-0.7, 0, 0), 0.75, marker("room_a"), "reach_room_a")
-	_mk(Conventions.AGENT_B, Pawn.Faction.AGENT, marker("entrance") + Vector3(0.7, 0, 0), 0.35, marker("room_a") + Vector3(1.2, 0, 0), "reach_room_a")
-	var c1 := _mk(Conventions.CRIMINAL_1, Pawn.Faction.CRIMINAL, marker("room_a") + Vector3(1.5, 0, -1.4), 0.4, marker("door_a"), "guard_door")
+	var a := _mk(Conventions.AGENT_A, Pawn.Faction.AGENT, marker("entrance") + Vector3(-0.7, 0, 0), 0.75, marker("room_a"), "clear_room_a")
+	a.role = Pawn.Role.SWEEPER
+	a.stance = Pawn.Stance.CAUTIOUS
+	var b := _mk(Conventions.AGENT_B, Pawn.Faction.AGENT, marker("entrance") + Vector3(0.7, 0, 0), 0.35, marker("room_a") + Vector3(0.8, 0, 0), "clear_room_a")
+	b.role = Pawn.Role.SWEEPER
+	b.stance = Pawn.Stance.DECISIVE
+	var c1 := _mk(Conventions.CRIMINAL_1, Pawn.Faction.CRIMINAL, marker("post_a"), 0.4, marker("post_a"), "hold_post")
+	c1.role = Pawn.Role.POSTED
+	c1.post_pos = marker("post_a")
 	c1.look_at(Vector3(marker("door_a").x, c1.global_position.y, marker("door_a").z), Vector3.UP)
-	_mk(Conventions.CRIMINAL_2, Pawn.Faction.CRIMINAL, marker("room_b") + Vector3(0.4, 0, 0.6), 0.4, marker("room_b"), "hold")
-	_mk(Conventions.CIVILIAN, Pawn.Faction.CIVILIAN, marker("room_a") + Vector3(-2.4, 0, 1.6), 0.8, marker("room_a") + Vector3(-2.4, 0, 1.6), "wait")
-	var a_pawn := _pawn(Conventions.AGENT_A)
-	if a_pawn:
-		a_pawn.stance = Pawn.Stance.CAUTIOUS
-	var b_pawn := _pawn(Conventions.AGENT_B)
-	if b_pawn:
-		b_pawn.stance = Pawn.Stance.DECISIVE
+	var c2 := _mk(Conventions.CRIMINAL_2, Pawn.Faction.CRIMINAL, marker("holder"), 0.35, marker("holder"), "stay_on_hostage")
+	c2.role = Pawn.Role.HOLDER
+	c2.hold_name = Conventions.CIVILIAN
+	var civ := _mk(Conventions.CIVILIAN, Pawn.Faction.CIVILIAN, marker("hostage"), 0.8, marker("hostage"), "held")
+	civ.role = Pawn.Role.HOSTAGE
+	civ.liberated = false
+
+
+func spawn_pawn(n: String, fac: Pawn.Faction, pos: Vector3, caut: float, goal: Vector3, goal_text: String) -> Pawn:
+	return _mk(n, fac, pos, caut, goal, goal_text)
 
 
 func _mk(n: String, fac: Pawn.Faction, pos: Vector3, caut: float, goal: Vector3, goal_text: String) -> Pawn:
@@ -288,17 +297,25 @@ func _check_mission() -> void:
 	var civ := _pawn(Conventions.CIVILIAN)
 	var a := _pawn(Conventions.AGENT_A)
 	var b := _pawn(Conventions.AGENT_B)
-	var c1 := _pawn(Conventions.CRIMINAL_1)
 	if civ and civ.downed:
 		last_outcome = "FAIL civilian"
 		if mode == Mode.EXECUTION:
 			running = false
-	elif a and b and a.downed and b.downed:
+		return
+	if a and b and a.downed and b.downed:
 		last_outcome = "FAIL team down"
 		if mode == Mode.EXECUTION:
 			running = false
-	elif c1 and c1.downed and civ and not civ.downed:
-		last_outcome = "SUCCESS"
+		return
+	var hostiles := 0
+	for p in get_tree().get_nodes_in_group(Conventions.GROUP_CRIMINALS):
+		if p is Pawn and not (p as Pawn).downed:
+			hostiles += 1
+	if hostiles == 0 and civ and not civ.downed:
+		if civ.global_position.distance_to(marker("exit")) < 2.2:
+			last_outcome = "EXTRACTED"
+		else:
+			last_outcome = "SUCCESS"
 		if mode == Mode.EXECUTION and sim_time > 8.0:
 			running = false
 

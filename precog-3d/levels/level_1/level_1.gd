@@ -18,11 +18,11 @@ func _ready() -> void:
 
 
 func _start_sim() -> void:
-	geometry.bake_navigation_mesh(false)
 	sim = SimHost.new()
 	sim.name = "Sim"
 	add_child(sim)
 	sim.setup(geometry)
+	geometry.bake_for_play()
 	var hud := GameHud.new()
 	hud.name = "HUD"
 	add_child(hud)

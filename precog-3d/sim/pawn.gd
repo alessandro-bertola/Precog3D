@@ -1,16 +1,21 @@
 class_name Pawn
 extends CharacterBody3D
-## Autonomous character. Acts only on own knowledge. No player motor control.
+## Autonomous character. Motor first, then a small mind. No player motor control.
 
 enum Faction { AGENT, CRIMINAL, CIVILIAN }
 enum Stance { CAUTIOUS, DECISIVE, STEALTH }
+enum Role { NONE, SWEEPER, POSTED, HOLDER, HOSTAGE }
 
 signal downed_changed(pawn)
+
+const ARRIVE := 0.50
+const FACE_SPEED := 0.14
+const GRAVITY := 22.0
 
 @export var display_name: String = "Pawn"
 @export var faction: Faction = Faction.AGENT
 @export var caution: float = 0.55
-@export var move_speed: float = 3.15
+@export var move_speed: float = 3.05
 @export var max_hp: float = 100.0
 @export var vision_range: float = 12.0
 @export var vision_fov: float = 70.0
@@ -19,6 +24,7 @@ signal downed_changed(pawn)
 var hp: float = 100.0
 var downed: bool = false
 var stance: Stance = Stance.DECISIVE
+var role: Role = Role.NONE
 var goal_text: String = "idle"
 var current_action: String = "idle"
 var goal_pos: Vector3 = Vector3.INF
@@ -30,11 +36,20 @@ var fire_cd: float = 0.0
 var spawn_xform: Transform3D
 var spawn_goal: Vector3 = Vector3.INF
 var spawn_goal_text: String = "idle"
+var anxiety: float = 0.0
+var gunshots_heard: int = 0
+var liberated: bool = false
+var hold_name: String = ""
+var post_pos: Vector3 = Vector3.INF
+var check_timer: float = 0.0
 
 var _nav: NavigationAgent3D
 var _label: Label3D
 var _mesh: MeshInstance3D
 var _eye: Marker3D
+var _safe_vel: Vector3 = Vector3.ZERO
+var _has_safe: bool = false
+var _arrived: bool = false
 
 func _ready() -> void:
 	hp = max_hp
@@ -42,21 +57,38 @@ func _ready() -> void:
 	add_to_group(Conventions.GROUP_PAWNS)
 	if faction == Faction.AGENT:
 		add_to_group(Conventions.GROUP_AGENTS)
+		if role == Role.NONE:
+			role = Role.SWEEPER
 	elif faction == Faction.CRIMINAL:
 		add_to_group(Conventions.GROUP_CRIMINALS)
 	else:
 		add_to_group(Conventions.GROUP_CIVILIANS)
+		if role == Role.NONE:
+			role = Role.HOSTAGE
 	collision_layer = Conventions.LAYER_CHARACTERS
-	collision_mask = Conventions.LAYER_WORLD | Conventions.LAYER_DOORS
+	collision_mask = Conventions.LAYER_WORLD | Conventions.LAYER_DOORS | Conventions.LAYER_CHARACTERS
+	floor_snap_length = 0.35
 	_build_visual()
+	_build_nav()
+
+
+func _build_nav() -> void:
 	_nav = NavigationAgent3D.new()
-	_nav.path_desired_distance = 0.4
-	_nav.target_desired_distance = 0.55
-	_nav.radius = 0.38
+	_nav.path_desired_distance = 0.32
+	_nav.target_desired_distance = ARRIVE
+	_nav.radius = 0.36
+	_nav.height = 1.7
+	_nav.max_speed = move_speed
 	_nav.avoidance_enabled = true
+	_nav.use_3d_avoidance = true
 	_nav.avoidance_layers = 1
+	_nav.avoidance_mask = 1
+	_nav.neighbor_distance = 2.4
+	_nav.time_horizon_agents = 0.85
+	_nav.max_neighbors = 8
+	_nav.avoidance_priority = 0.55 if faction == Faction.AGENT else 0.45
+	_nav.velocity_computed.connect(_on_nav_velocity)
 	add_child(_nav)
-	floor_snap_length = 0.3
 
 
 func _build_visual() -> void:
@@ -72,7 +104,7 @@ func _build_visual() -> void:
 	add_child(_mesh)
 	var col := CollisionShape3D.new()
 	var shape := CapsuleShape3D.new()
-	shape.radius = 0.32
+	shape.radius = 0.30
 	shape.height = 1.65
 	col.shape = shape
 	col.position = Vector3(0, 0.9, 0)
@@ -80,7 +112,7 @@ func _build_visual() -> void:
 	_label = Label3D.new()
 	_label.text = display_name
 	_label.position = Vector3(0, 2.05, 0)
-	_label.font_size = 36
+	_label.font_size = 34
 	_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	add_child(_label)
 	_eye = Marker3D.new()
@@ -113,19 +145,30 @@ func set_goal(pos: Vector3, text: String) -> void:
 	if spawn_goal.x == INF:
 		spawn_goal = pos
 		spawn_goal_text = text
-	if not downed and pos.x != INF:
-		_nav.target_position = pos
+	_arrived = false
+	if _nav != null and not downed and pos.x != INF:
+		var dest := pos
+		dest.y = global_position.y
+		_nav.target_position = dest
 
 
 func set_action(text: String) -> void:
 	current_action = text
 
 
+func _on_nav_velocity(safe: Vector3) -> void:
+	_safe_vel = safe
+	_has_safe = true
+
+
 func _physics_process(delta: float) -> void:
 	if not _sim_running() or downed:
 		velocity = Vector3.ZERO
+		if _nav:
+			_nav.set_velocity(Vector3.ZERO)
 		return
 	fire_cd = maxf(0.0, fire_cd - delta)
+	check_timer = maxf(0.0, check_timer - delta)
 	_sense()
 	_decide()
 	_move(delta)
@@ -149,16 +192,18 @@ func _sense() -> void:
 			continue
 		if _can_see(other):
 			knowledge.see(other.display_name, other.global_position, now, _room_of(other.global_position))
+			if faction == Faction.CRIMINAL and other.faction == Faction.CIVILIAN and other.current_action == "flee":
+				_execute_hostage(other)
 		else:
 			knowledge.mark_lost(other.display_name)
 	for ev in _bus_sounds():
 		var dist := global_position.distance_to(ev.pos)
 		if dist <= ev.radius:
-			var noisy := ev.pos + Vector3(randf_range(-1.2, 1.2), 0, randf_range(-1.2, 1.2)) * (dist / maxf(ev.radius, 0.1))
+			var noisy: Vector3 = ev.pos + Vector3(randf_range(-1.2, 1.2), 0, randf_range(-1.2, 1.2)) * (dist / maxf(ev.radius, 0.1))
 			knowledge.hear(ev.src, noisy, now)
-			if faction == Faction.CIVILIAN and ev.kind == "gunshot":
-				priority_civilian = true
-				set_goal(_marker("exit"), "flee_exit")
+			if ev.kind == "gunshot":
+				gunshots_heard += 1
+				anxiety = clampf(anxiety + 0.34, 0.0, 1.0)
 
 
 func _decide() -> void:
@@ -166,10 +211,7 @@ func _decide() -> void:
 		current_action = "downed"
 		return
 	if faction == Faction.CIVILIAN:
-		if knowledge.debug_lines().contains("gunshot") or goal_text == "flee_exit":
-			current_action = "flee"
-			return
-		current_action = "wait"
+		_decide_civilian()
 		return
 	if faction == Faction.CRIMINAL:
 		_decide_criminal()
@@ -178,106 +220,339 @@ func _decide() -> void:
 
 
 func _decide_agent() -> void:
-	if priority_civilian:
-		var civ := _find_named(Conventions.CIVILIAN)
-		if civ and knowledge.get_fact(civ.display_name) and knowledge.get_fact(civ.display_name).seen_now:
-			goal_text = "protect_civilian"
-	var hostile_room_a := knowledge.knows_hostile_in("room_a")
-	if goal_text.begins_with("secure") or goal_text == "reach_room_a":
-		if hostile_room_a and stance == Stance.CAUTIOUS:
-			set_goal(_marker("central") + Vector3(-1.5, 0, 0), "stack_on_door")
-			current_action = "hold_cautious"
-			_maybe_open_nearby()
-			return
-		if hostile_room_a and stance != Stance.CAUTIOUS:
-			set_goal(_marker("room_a"), "clear_room_a")
 	_maybe_open_nearby()
-	if goal_pos.x != INF:
-		if global_position.distance_to(goal_pos) <= 0.7:
-			current_action = "wait"
+	var threat := _best_known_threat()
+	if threat != null:
+		set_goal(threat.global_position, "engage")
+		current_action = "engage"
+		return
+	var stale := _stale_threat_pos()
+	if stale.x != INF:
+		set_goal(stale, "hunt")
+		current_action = "hunt"
+		return
+	var civ := _find_named(Conventions.CIVILIAN)
+	if civ and not civ.downed and civ.liberated:
+		set_goal(_marker("exit"), "extract")
+		current_action = "extract"
+		return
+	if civ and not civ.downed and not civ.liberated:
+		if knowledge.get_fact(civ.display_name) or priority_civilian:
+			set_goal(civ.global_position, "reach_civilian")
+			current_action = "reach_civilian"
+			return
+	if knowledge.knows_hostile_in("room_a") and stance == Stance.CAUTIOUS and check_timer <= 0.0 and goal_text != "clear_room_a":
+		set_goal(_marker("central") + Vector3(-1.6, 0, 0), "stack_on_door")
+		current_action = "hold_cautious"
+		check_timer = 1.4
+		return
+	if check_timer > 0.0 and current_action == "hold_cautious":
+		return
+	if _room_cleared_of_hostiles("room_a"):
+		if civ and not civ.downed:
+			set_goal(civ.global_position, "seek_civilian")
 		else:
-			current_action = "move"
-	_nav.target_position = goal_pos if goal_pos.x != INF else global_position
-	if _nav.is_navigation_finished() == false:
-		var path := _nav.get_current_navigation_path()
-		if path.is_empty() and sim_time_ok():
-			blocked_reason = "no_path"
-			current_action = "blocked"
-		else:
-			blocked_reason = ""
+			set_goal(_marker("room_b"), "clear_room_b")
+		current_action = "sweep"
+		return
+	set_goal(_marker("room_a"), "clear_room_a")
+	current_action = "sweep"
 
 
 func _decide_criminal() -> void:
-	var saw_agent := false
-	for f in knowledge.all_facts():
-		var fact := f as KnowledgeStore.Fact
-		if fact.seen_now and _is_agent_name(fact.id):
-			saw_agent = true
-			goal_pos = fact.last_pos
-			goal_text = "engage"
-			current_action = "combat"
+	_maybe_open_nearby()
+	var saw := _visible_enemy()
+	if saw:
+		anxiety = clampf(anxiety + 0.2, 0.0, 1.0)
+		current_action = "combat"
+		if role == Role.HOLDER:
+			_hold_on_civilian()
 			return
-	if goal_text == "guard_door":
+		if role == Role.POSTED:
+			set_goal(_post(), "hold_post")
+			return
+		if _should_flee():
+			set_goal(_marker("exit"), "flee_exit")
+			current_action = "flee"
+			return
+		set_goal(saw.global_position, "engage")
+		return
+	if _should_flee():
+		set_goal(_marker("exit"), "flee_exit")
+		current_action = "flee"
+		_maybe_open_nearby()
+		return
+	if role == Role.HOLDER:
+		_hold_on_civilian()
+		current_action = "hold_hostage"
+		return
+	if role == Role.POSTED:
+		set_goal(_post(), "hold_post")
 		current_action = "guard"
 		return
 	current_action = "wait"
 
 
-func _maybe_open_nearby() -> void:
-	for d in get_tree().get_nodes_in_group(Conventions.GROUP_DOORS):
-		if not (d is Door):
-			continue
-		var door := d as Door
-		if door.is_open or door.busy:
-			continue
-		if global_position.distance_to(door.global_position) < 1.35:
-			if _facing_or_path_blocked():
-				door.request_open(self)
+func _decide_civilian() -> void:
+	if _is_held() and not liberated:
+		if gunshots_heard >= 3:
+			liberated = false
+			set_goal(_marker("exit"), "flee_exit")
+			current_action = "flee"
+			return
+		goal_pos = global_position
+		goal_text = "held"
+		current_action = "held"
+		_arrived = true
+		return
+	liberated = true
+	if gunshots_heard >= 3 and current_action == "flee":
+		set_goal(_marker("exit"), "flee_exit")
+		current_action = "flee"
+		return
+	var escort := _nearest_living_agent()
+	if escort:
+		var dest := escort.global_position
+		if dest.distance_to(_marker("exit")) < 2.5:
+			dest = _marker("exit")
+		set_goal(dest, "follow_agent")
+		current_action = "follow"
+		return
+	set_goal(_marker("exit"), "extract")
+	current_action = "follow"
 
 
-func _facing_or_path_blocked() -> bool:
-	if blocked_reason == "no_path":
-		return true
-	if _nav.is_navigation_finished():
+func _hold_on_civilian() -> void:
+	var civ := _find_named(hold_name) if hold_name != "" else _find_named(Conventions.CIVILIAN)
+	if civ == null or civ.downed:
+		hold_name = ""
+		if _should_flee():
+			set_goal(_marker("exit"), "flee_exit")
+			current_action = "flee"
+		return
+	var stand := civ.global_position + (global_position - civ.global_position).normalized() * 0.95
+	if global_position.distance_to(civ.global_position) > 1.35:
+		set_goal(stand, "stay_on_hostage")
+	else:
+		goal_pos = global_position
+		goal_text = "stay_on_hostage"
+		_arrived = true
+
+
+func _should_flee() -> bool:
+	if role == Role.HOLDER and _find_named(Conventions.CIVILIAN) and not _find_named(Conventions.CIVILIAN).downed:
 		return false
-	var next := _nav.get_next_path_position()
-	var ahead := PhysicsRayQueryParameters3D.create(
-		global_position + Vector3(0, 0.9, 0),
-		global_position + Vector3(0, 0.9, 0) + (-transform.basis.z) * 1.4
-	)
-	ahead.collision_mask = Conventions.LAYER_DOORS
-	ahead.exclude = [get_rid()]
-	var hit := get_world_3d().direct_space_state.intersect_ray(ahead)
-	return not hit.is_empty() or global_position.distance_to(next) < 0.05
+	if anxiety < 0.6:
+		return false
+	return not _has_living_partner()
+
+
+func _is_held() -> bool:
+	for p in get_tree().get_nodes_in_group(Conventions.GROUP_CRIMINALS):
+		if p is Pawn:
+			var cr := p as Pawn
+			if not cr.downed and cr.role == Role.HOLDER:
+				return true
+	return false
+
+
+func _has_living_partner() -> bool:
+	for p in get_tree().get_nodes_in_group(Conventions.GROUP_CRIMINALS):
+		if p == self or not (p is Pawn):
+			continue
+		if not (p as Pawn).downed:
+			return true
+	return false
+
+
+func _best_known_threat() -> Pawn:
+	var best: Pawn = null
+	var best_d := 999.0
+	for p in get_tree().get_nodes_in_group(Conventions.GROUP_CRIMINALS):
+		if not (p is Pawn):
+			continue
+		var cr := p as Pawn
+		if cr.downed:
+			continue
+		var fact := knowledge.get_fact(cr.display_name)
+		if fact == null:
+			continue
+		if fact.seen_now or fact.source == "precog" or fact.source == "radio":
+			var d := global_position.distance_to(cr.global_position)
+			if d < best_d:
+				best = cr
+				best_d = d
+	return best
+
+
+func _stale_threat_pos() -> Vector3:
+	for f in knowledge.all_facts():
+		var fact := f as KnowledgeStore.Fact
+		if fact.id.begins_with("Criminal") and not fact.seen_now and fact.source != "none":
+			var live := _find_named(fact.id)
+			if live and not live.downed:
+				return fact.last_pos
+	return Vector3.INF
+
+
+func _room_cleared_of_hostiles(_room: String) -> bool:
+	return goal_text == "clear_room_a" and _arrived
+
+
+func _nearest_living_agent() -> Pawn:
+	var best: Pawn = null
+	var best_d := 999.0
+	for p in get_tree().get_nodes_in_group(Conventions.GROUP_AGENTS):
+		if p is Pawn and not (p as Pawn).downed:
+			var d := global_position.distance_to((p as Pawn).global_position)
+			if d < best_d:
+				best = p
+				best_d = d
+	return best
+
+
+func _post() -> Vector3:
+	if post_pos.x != INF:
+		return post_pos
+	return _marker("post_a")
+
+
+func _wants_move() -> bool:
+	if downed:
+		return false
+	if current_action in ["wait", "guard", "hold_cautious", "downed", "held", "hold_hostage", "open_door"]:
+		if current_action == "hold_hostage" and goal_text == "stay_on_hostage" and _arrived:
+			return false
+		if current_action in ["wait", "guard", "hold_cautious", "held", "open_door"]:
+			return false
+	if goal_pos.x == INF:
+		return false
+	var flat := goal_pos - global_position
+	flat.y = 0.0
+	return flat.length() > ARRIVE
+
+
+func _current_speed() -> float:
+	if current_action == "flee":
+		return move_speed + 0.7
+	if stance == Stance.STEALTH:
+		return move_speed * 0.72
+	if stance == Stance.CAUTIOUS:
+		return move_speed * 0.86
+	return move_speed
 
 
 func _move(delta: float) -> void:
-	if downed or current_action in ["wait", "guard", "hold_cautious", "downed", "blocked"]:
-		if current_action != "blocked" and current_action != "hold_cautious":
-			velocity.x = 0
-			velocity.z = 0
-		velocity.y -= 20.0 * delta
+	velocity.y -= GRAVITY * delta
+	var door := _blocking_door()
+	if door != null:
+		current_action = "open_door"
+		door.request_open(self)
+		_brake()
 		move_and_slide()
 		return
-	if goal_pos.x == INF:
+	if not _wants_move():
+		_brake()
+		move_and_slide()
 		return
-	_nav.target_position = goal_pos
+	var dest := goal_pos
+	dest.y = global_position.y
+	if _nav:
+		_nav.target_position = dest
+		_nav.max_speed = _current_speed()
+	var to_goal := dest - global_position
+	to_goal.y = 0.0
+	if to_goal.length() <= ARRIVE:
+		_arrived = true
+		_brake()
+		if current_action in ["sweep", "hunt", "engage", "seek_civilian", "reach_civilian", "extract", "follow", "flee"]:
+			current_action = "wait" if current_action != "hold_hostage" else current_action
+		move_and_slide()
+		return
+	_arrived = false
+	if _nav == null:
+		_direct_step(to_goal.normalized() * _current_speed())
+		move_and_slide()
+		return
 	if _nav.is_navigation_finished():
-		current_action = "wait"
-		velocity = Vector3(0, velocity.y, 0)
+		_arrived = true
+		_brake()
 		move_and_slide()
 		return
 	var next := _nav.get_next_path_position()
 	var dir := next - global_position
-	dir.y = 0
-	if dir.length() > 0.05:
-		dir = dir.normalized()
-		var look := global_position + dir
-		look_at(Vector3(look.x, global_position.y, look.z), Vector3.UP)
-		velocity.x = dir.x * move_speed
-		velocity.z = dir.z * move_speed
-	velocity.y -= 20.0 * delta
+	dir.y = 0.0
+	if dir.length() < 0.04:
+		blocked_reason = "no_path" if sim_time_ok() else ""
+		_brake()
+		move_and_slide()
+		return
+	blocked_reason = ""
+	dir = dir.normalized()
+	var desired := dir * _current_speed()
+	_nav.set_velocity(desired)
+	var use := desired
+	if _has_safe and _safe_vel.length() > 0.02:
+		use = _safe_vel
+	_direct_step(use)
 	move_and_slide()
+
+
+func _direct_step(use: Vector3) -> void:
+	velocity.x = use.x
+	velocity.z = use.z
+	if Vector3(use.x, 0, use.z).length() > FACE_SPEED:
+		var look := global_position + Vector3(use.x, 0, use.z)
+		look_at(Vector3(look.x, global_position.y, look.z), Vector3.UP)
+
+
+func _brake() -> void:
+	velocity.x = 0.0
+	velocity.z = 0.0
+	if _nav:
+		_nav.set_velocity(Vector3.ZERO)
+
+
+func _blocking_door() -> Door:
+	if _nav == null:
+		return null
+	var ahead := -global_transform.basis.z
+	if not _nav.is_navigation_finished():
+		var next := _nav.get_next_path_position() - global_position
+		next.y = 0.0
+		if next.length() > 0.05:
+			ahead = next.normalized()
+	var from := global_position + Vector3(0, 0.9, 0)
+	var q := PhysicsRayQueryParameters3D.create(from, from + ahead * 1.15)
+	q.collision_mask = Conventions.LAYER_DOORS
+	q.exclude = [get_rid()]
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if hit.is_empty():
+		return null
+	var n: Node = hit.collider
+	while n:
+		if n is Door:
+			var d := n as Door
+			if not d.is_open and not d.busy:
+				return d
+			return null
+		n = n.get_parent()
+	return null
+
+
+func _maybe_open_nearby() -> void:
+	var d := _blocking_door()
+	if d:
+		d.request_open(self)
+		return
+	for node in get_tree().get_nodes_in_group(Conventions.GROUP_DOORS):
+		if not (node is Door):
+			continue
+		var door := node as Door
+		if door.is_open or door.busy:
+			continue
+		if global_position.distance_to(door.global_position) < 1.4:
+			door.request_open(self)
 
 
 func _try_shoot() -> void:
@@ -297,6 +572,15 @@ func _try_shoot() -> void:
 	_emit_sound("gunshot", 14.0)
 	target.take_hit(50.0, self)
 	_flash()
+
+
+func _execute_hostage(civ: Pawn) -> void:
+	if civ.downed:
+		return
+	civ.take_hit(200.0, self)
+	var host := get_tree().get_first_node_in_group("sim")
+	if host and host.has_method("log_event"):
+		host.call("log_event", "hostage_killed", "%s saw the civilian flee" % display_name, display_name)
 
 
 func _try_radio() -> void:
@@ -323,6 +607,9 @@ func take_hit(amount: float, _from: Pawn) -> void:
 		current_action = "downed"
 		goal_text = "incapacitated"
 		collision_layer = 0
+		if _nav:
+			_nav.avoidance_enabled = false
+			_nav.set_velocity(Vector3.ZERO)
 		downed_changed.emit(self)
 		var mat := _mesh.material_override as StandardMaterial3D
 		if mat:
@@ -344,7 +631,7 @@ func _visible_enemy() -> Pawn:
 
 
 func _can_see(other: Pawn) -> bool:
-	var eye := _eye.global_position
+	var eye := _eye.global_position if _eye else global_position + Vector3(0, 1.55, 0)
 	var chest := other.global_position + Vector3(0, 1.3, 0)
 	var to := chest - eye
 	var dist := to.length()
@@ -375,9 +662,8 @@ func _is_agent_name(id: String) -> bool:
 func _any_hostile_seen() -> bool:
 	for f in knowledge.all_facts():
 		var fact := f as KnowledgeStore.Fact
-		if fact.seen_now and not _is_agent_name(fact.id) and fact.id != display_name:
-			if fact.id.begins_with("Criminal"):
-				return true
+		if fact.seen_now and fact.id.begins_with("Criminal"):
+			return true
 	return false
 
 
@@ -445,20 +731,40 @@ func sim_time_ok() -> bool:
 	return _time() > 0.5
 
 
+func _role_tag() -> String:
+	match role:
+		Role.POSTED:
+			return "POST"
+		Role.HOLDER:
+			return "HOLD"
+		Role.HOSTAGE:
+			return "CIV"
+		Role.SWEEPER:
+			return "AGT"
+		_:
+			return ""
+
+
 func _update_label() -> void:
-	_label.text = display_name
+	var tag := _role_tag()
+	_label.text = display_name if tag == "" else "%s [%s]" % [display_name, tag]
 	if downed:
 		_label.text += " [DOWN]"
 		_label.modulate = Color(0.5, 0.5, 0.5)
 	elif DebugMode.enabled:
 		_label.text += "\n" + current_action
+		_label.modulate = Color.WHITE
+	else:
+		_label.modulate = Color.WHITE
 
 
 func debug_text() -> String:
-	return "%s\nfaction:%s\nhp:%.0f\ngoal:%s\naction:%s\nstance:%s\n%s\n%s" % [
+	return "%s\nfaction:%s role:%s\nhp:%.0f anxiety:%.2f\ngoal:%s\naction:%s\nstance:%s\n%s\n%s" % [
 		display_name,
 		Faction.keys()[faction],
+		Role.keys()[role],
 		hp,
+		anxiety,
 		goal_text,
 		current_action,
 		Stance.keys()[stance],
@@ -488,6 +794,12 @@ func snapshot() -> Dictionary:
 		"stance": stance,
 		"caution": caution,
 		"priority_civilian": priority_civilian,
+		"role": role,
+		"anxiety": anxiety,
+		"gunshots_heard": gunshots_heard,
+		"liberated": liberated,
+		"hold_name": hold_name,
+		"post_pos": post_pos,
 		"facts": facts
 	}
 
@@ -501,6 +813,12 @@ func apply_snapshot(data: Dictionary) -> void:
 	stance = data["stance"]
 	caution = data["caution"]
 	priority_civilian = data["priority_civilian"]
+	role = data.get("role", role)
+	anxiety = data.get("anxiety", 0.0)
+	gunshots_heard = data.get("gunshots_heard", 0)
+	liberated = data.get("liberated", false)
+	hold_name = data.get("hold_name", "")
+	post_pos = data.get("post_pos", Vector3.INF)
 	collision_layer = 0 if downed else Conventions.LAYER_CHARACTERS
 	knowledge = KnowledgeStore.new()
 	for f in data["facts"]:
@@ -512,8 +830,12 @@ func apply_snapshot(data: Dictionary) -> void:
 		fact.seen_now = f["seen"]
 		fact.room_hint = f["room"]
 		knowledge._facts[fact.id] = fact
-	if not downed and goal_pos.x != INF:
-		_nav.target_position = goal_pos
+	_arrived = false
+	_has_safe = false
+	if _nav:
+		_nav.avoidance_enabled = not downed
+		if not downed and goal_pos.x != INF:
+			_nav.target_position = goal_pos
 
 
 func reset_spawn() -> void:
@@ -526,5 +848,11 @@ func reset_spawn() -> void:
 	fire_cd = 0.0
 	blocked_reason = ""
 	current_action = "idle"
+	anxiety = 0.0
+	gunshots_heard = 0
+	liberated = false
+	_arrived = false
+	if _nav:
+		_nav.avoidance_enabled = true
 	if spawn_goal.x != INF:
 		set_goal(spawn_goal, spawn_goal_text)

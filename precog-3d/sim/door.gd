@@ -17,7 +17,7 @@ var _mesh: MeshInstance3D
 func _ready() -> void:
 	add_to_group(Conventions.GROUP_DOORS)
 	_body = StaticBody3D.new()
-	_body.collision_layer = Conventions.LAYER_WORLD | Conventions.LAYER_DOORS
+	_body.collision_layer = Conventions.LAYER_DOORS
 	_body.collision_mask = 0
 	var col := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
@@ -62,7 +62,7 @@ func _set_open_instant(open: bool) -> void:
 	is_open = open
 	_angle = deg_to_rad(92.0) if open else 0.0
 	rotation.y = _angle
-	_body.collision_layer = 0 if open else (Conventions.LAYER_WORLD | Conventions.LAYER_DOORS)
+	_body.collision_layer = 0 if open else Conventions.LAYER_DOORS
 	if _body.has_node("CollisionShape3D"):
 		(_body.get_node("CollisionShape3D") as CollisionShape3D).disabled = open
 
