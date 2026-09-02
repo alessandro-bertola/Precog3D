@@ -24,7 +24,7 @@ func _ready() -> void:
 		print("VISUAL MODE")
 		DebugMode.enabled = true
 		await _photo_hold_vs_flee()
-		await _tick(1.2)
+		await get_tree().create_timer(6.0).timeout
 		get_tree().quit(0)
 		return
 	await _case_a_agent_reaches_room()
@@ -383,28 +383,39 @@ func _photo_hold_vs_flee() -> void:
 	await _tick(2.0)
 	await _save_shot("verified_corridor_walk")
 	var t := 0.0
-	while t < 8.0 and not (_door_a() != null and _door_a().is_open):
+	while t < 9.0 and not (_door_a() != null and _door_a().is_open):
 		await get_tree().physics_frame
 		t += get_physics_process_delta_time()
 	cam.set_view(Vector3(-4.0, 0.0, 18.0), 11.5, -1.05, -0.62)
-	await _tick(0.7)
+	await _tick(0.55)
 	await _save_shot("verified_door_open")
-	await _tick(2.6)
+	while t < 12.0 and walker.global_position.distance_to(host.marker("room_a")) > 1.4:
+		await get_tree().physics_frame
+		t += get_physics_process_delta_time()
+	cam.set_view(Vector3(-7.2, 0.0, 18.0), 11.0, -1.2, -0.6)
+	await _tick(0.35)
 	await _save_shot("verified_room_a_arrive")
 	host.running = false
 	await _clear_pawns()
-	cam.set_view(Vector3(3.2, 0.0, 19.5), 17.0, -0.9, -0.68)
+	cam.set_view(Vector3(-2.0, 0.0, 20.0), 16.0, -0.95, -0.7)
+	var runner := host.spawn_pawn("Runner", Pawn.Faction.CRIMINAL, host.marker("room_a"), 0.3, host.marker("exit"), "flee_exit")
+	runner.role = Pawn.Role.NONE
+	runner.anxiety = 0.9
+	runner.combat_enabled = false
+	host.running = true
+	await _tick(3.4)
+	await _save_shot("verified_flee_exit")
+	host.running = false
+	await _clear_pawns()
+	cam.set_view(Vector3(12.4, 0.0, 18.4), 10.0, -0.9, -0.55)
 	var civ := host.spawn_pawn(Conventions.CIVILIAN, Pawn.Faction.CIVILIAN, host.marker("hostage"), 0.8, host.marker("hostage"), "held")
 	civ.role = Pawn.Role.HOSTAGE
 	var holder := host.spawn_pawn("Keeper", Pawn.Faction.CRIMINAL, host.marker("holder"), 0.35, host.marker("holder"), "stay_on_hostage")
 	holder.role = Pawn.Role.HOLDER
 	holder.hold_name = Conventions.CIVILIAN
-	var runner := host.spawn_pawn("Runner", Pawn.Faction.CRIMINAL, host.marker("room_a"), 0.3, host.marker("exit"), "flee_exit")
-	runner.role = Pawn.Role.NONE
-	runner.anxiety = 0.9
-	runner.combat_enabled = false
+	holder.combat_enabled = false
 	host.emit_sound(holder.global_position, 6.0, "gunshot", "noise")
 	host.running = true
-	await _tick(3.2)
-	await _save_shot("verified_hold_vs_flee")
+	await _tick(2.2)
+	await _save_shot("verified_hold_hostage")
 	host.running = false
