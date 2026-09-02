@@ -20,8 +20,11 @@ func _ready() -> void:
 	_lines.append("nav polygons=%d" % geo.polygon_count())
 	for i in 6:
 		await get_tree().physics_frame
-	if OS.get_cmdline_user_args().has("visual"):
+	if _want_visual():
+		print("VISUAL MODE")
+		DebugMode.enabled = true
 		await _photo_hold_vs_flee()
+		await _tick(1.2)
 		get_tree().quit(0)
 		return
 	await _case_a_agent_reaches_room()
@@ -336,6 +339,12 @@ func _case_f_group_lock() -> void:
 	_ok("F_holder_holds", holder.current_action != "flee" and holder.global_position.distance_to(h0) < 0.55, "action=%s drift=%.2f" % [holder.current_action, holder.global_position.distance_to(h0)])
 
 
+func _want_visual() -> bool:
+	var args := OS.get_cmdline_args()
+	args.append_array(OS.get_cmdline_user_args())
+	return args.has("visual") or args.has("--visual")
+
+
 func _shot_dir() -> String:
 	var d := "/opt/cursor/artifacts/screenshots"
 	DirAccess.make_dir_recursive_absolute(d)
@@ -344,7 +353,7 @@ func _shot_dir() -> String:
 
 func _save_shot(name: String) -> void:
 	await get_tree().process_frame
-	await get_tree().process_frame
+	await RenderingServer.frame_post_draw
 	var tex := get_viewport().get_texture()
 	if tex == null:
 		return
@@ -352,6 +361,7 @@ func _save_shot(name: String) -> void:
 	if img == null:
 		return
 	img.save_png("%s/%s.png" % [_shot_dir(), name])
+	print("SHOT %s" % name)
 
 
 func _photo_hold_vs_flee() -> void:
@@ -369,20 +379,20 @@ func _photo_hold_vs_flee() -> void:
 	walker.stance = Pawn.Stance.DECISIVE
 	walker.combat_enabled = false
 	host.running = true
-	await _tick(1.6)
-	await _save_shot("movement_corridor_walk")
+	await _tick(2.0)
+	await _save_shot("verified_corridor_walk")
 	var t := 0.0
 	while t < 8.0 and not (_door_a() != null and _door_a().is_open):
 		await get_tree().physics_frame
 		t += get_physics_process_delta_time()
-	cam.set_view(Vector3(-4.0, 0.0, 18.0), 12.0, -1.1, -0.7)
-	await _tick(0.45)
-	await _save_shot("movement_door_open")
-	await _tick(2.4)
-	await _save_shot("movement_room_a_arrive")
+	cam.set_view(Vector3(-4.0, 0.0, 18.0), 11.5, -1.05, -0.62)
+	await _tick(0.7)
+	await _save_shot("verified_door_open")
+	await _tick(2.6)
+	await _save_shot("verified_room_a_arrive")
 	host.running = false
 	await _clear_pawns()
-	cam.set_view(Vector3(4.0, 0.0, 20.0), 18.0, -0.85, -0.72)
+	cam.set_view(Vector3(3.2, 0.0, 19.5), 17.0, -0.9, -0.68)
 	var civ := host.spawn_pawn(Conventions.CIVILIAN, Pawn.Faction.CIVILIAN, host.marker("hostage"), 0.8, host.marker("hostage"), "held")
 	civ.role = Pawn.Role.HOSTAGE
 	var holder := host.spawn_pawn("Keeper", Pawn.Faction.CRIMINAL, host.marker("holder"), 0.35, host.marker("holder"), "stay_on_hostage")
@@ -394,6 +404,6 @@ func _photo_hold_vs_flee() -> void:
 	runner.combat_enabled = false
 	host.emit_sound(holder.global_position, 6.0, "gunshot", "noise")
 	host.running = true
-	await _tick(2.4)
-	await _save_shot("movement_hold_vs_flee")
+	await _tick(3.2)
+	await _save_shot("verified_hold_vs_flee")
 	host.running = false
