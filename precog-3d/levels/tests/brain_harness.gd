@@ -374,6 +374,7 @@ func _photo_hold_vs_flee() -> void:
 	cam.pitch = -0.75
 	add_child(cam)
 	cam.set_view(Vector3(-0.2, 0.0, 10.0), 15.0, -0.2, -0.72)
+	await get_tree().create_timer(2.5).timeout
 	var walker := host.spawn_pawn("Walker", Pawn.Faction.AGENT, host.marker("entrance"), 0.3, host.marker("room_a"), "clear_room_a")
 	walker.role = Pawn.Role.SWEEPER
 	walker.stance = Pawn.Stance.DECISIVE
