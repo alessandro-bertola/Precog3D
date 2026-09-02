@@ -104,4 +104,6 @@ func _apply() -> void:
 		cos(yaw) * cos(pitch)
 	) * distance
 	_cam.position = pivot + offset
-	_cam.look_at(pivot + Vector3(0, 1.2, 0), Vector3.UP)
+	var look := pivot + Vector3(0, 1.2, 0)
+	if _cam.position.distance_squared_to(look) > 0.0001:
+		_cam.look_at_from_position(_cam.position, look, Vector3.UP)

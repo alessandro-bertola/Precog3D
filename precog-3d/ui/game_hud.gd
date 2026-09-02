@@ -11,6 +11,9 @@ var _why: Label
 var _compare: Label
 var _target: OptionButton
 var _outcome: Label
+var _btn_play: Button
+var _btn_pause: Button
+var _btn_project: Button
 
 func setup(h: SimHost) -> void:
 	host = h
@@ -38,7 +41,9 @@ func _build() -> void:
 	panel.custom_minimum_size = Vector2(280, 0)
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	root.add_child(panel)
-	_btn(panel, "Project future", _project)
+	_btn_play = _btn(panel, "Play present", _play)
+	_btn_pause = _btn(panel, "Pause present", _pause)
+	_btn_project = _btn(panel, "Project future", _project)
 	_btn(panel, "Return to present", _return)
 	_btn(panel, "Execute", _execute)
 	_target = OptionButton.new()
@@ -46,7 +51,9 @@ func _build() -> void:
 	_target.add_item(Conventions.AGENT_B)
 	panel.add_child(_target)
 	_btn(panel, "Warn: hostile in Room A (1)", func(): _precog("hostile_room_a"))
-	_btn(panel, "Precise position (2)", func(): _precog("position"))
+	_btn(panel, "Warn: hostile in Room B (1)", func(): _precog("hostile_room_b"))
+	_btn(panel, "Precise position Room A (2)", func(): _precog("position"))
+	_btn(panel, "Precise position Room B (2)", func(): _precog("position_b"))
 	_btn(panel, "Directive cautious (1)", func(): _precog("cautious"))
 	_btn(panel, "Directive decisive (1)", func(): _precog("decisive"))
 	_btn(panel, "Directive stealth (1)", func(): _precog("stealth"))
@@ -62,14 +69,21 @@ func _build() -> void:
 	_compare = _lab(root, Vector2(1100, 280), 14)
 	_compare.size = Vector2(480, 240)
 	var hint := _lab(root, Vector2(16, 860), 14)
-	hint.text = "PRESENT is frozen. Project the future, spend Precog points, then Execute.\nYou do not move people. You move information."
+	hint.text = "Play present to let real time flow, Pause to lock a new present, then Project that future.\nReturn discards a projection. Execute commits. You do not move people. You move information."
 
 
 func _process(_delta: float) -> void:
-	if host == null:
+	if host == null or _btn_project == null:
 		return
 	_time.text = "T+%.1fs / %.0fs" % [host.sim_time, host.horizon]
 	_outcome.text = host.last_outcome
+	if host.mode == SimHost.Mode.PROJECTION and not host.running:
+		_btn_project.text = "Continue future"
+	else:
+		_btn_project.text = "Project future"
+	var in_present := host.mode == SimHost.Mode.PRESENT
+	_btn_play.disabled = (not in_present) or host.running or host.committed
+	_btn_pause.disabled = (not in_present) or (not host.running)
 	if host.mode == SimHost.Mode.EXECUTION and not host.running and host.last_outcome != "":
 		_why.text = "DEBRIEF\n" + host.last_outcome + "\nThe future was a rehearsal. This was the operation."
 	_refresh_why()
@@ -80,6 +94,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		if host:
 			host.select_pawn_at_mouse()
+
+
+func _play() -> void:
+	host.play_present()
+
+
+func _pause() -> void:
+	host.pause_present()
 
 
 func _project() -> void:
@@ -95,13 +117,17 @@ func _execute() -> void:
 
 
 func _precog(kind: String) -> void:
-	var name := _target.get_item_text(_target.selected)
-	var ok := host.apply_precog(kind, name)
+	var target_name := _target.get_item_text(_target.selected)
+	var ok := host.apply_precog(kind, target_name)
 	if not ok:
 		_outcome.text = "Not enough Precog or not in PRESENT"
 
 
 func _on_mode(m: String) -> void:
+	if host.mode == SimHost.Mode.PRESENT and host.running:
+		_mode.text = "PRESENT LIVE"
+		_mode.modulate = Color(0.55, 1.0, 0.6)
+		return
 	_mode.text = m
 	match m:
 		"PRESENT":
@@ -145,8 +171,9 @@ func _lab(parent: Node, pos: Vector2, size: int) -> Label:
 	return l
 
 
-func _btn(parent: Node, text: String, cb: Callable) -> void:
+func _btn(parent: Node, text: String, cb: Callable) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.pressed.connect(cb)
 	parent.add_child(b)
+	return b

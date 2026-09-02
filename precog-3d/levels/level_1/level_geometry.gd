@@ -1,33 +1,67 @@
 class_name LevelGeometry
-extends NavigationRegion3D
+extends Node3D
 ## Readable dollhouse for Level 1. Rooms, doors, cover, two routes.
 
 const WALL_H := 3.0
 const WALL_T := 0.3
 
 var markers: Dictionary = {}
+var _nav_walk: Array = []
+var _nav_block: Array = []
+var nav_poly_count: int = 0
 
 func build() -> void:
 	name = "World"
-	var nmesh := NavigationMesh.new()
-	nmesh.geometry_parsed_geometry_type = NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS
-	nmesh.agent_radius = 0.38
-	nmesh.agent_height = 1.7
-	nmesh.agent_max_climb = 0.25
-	nmesh.agent_max_slope = 45.0
-	nmesh.cell_size = 0.25
-	nmesh.cell_height = 0.25
-	navigation_mesh = nmesh
+	_nav_walk.clear()
+	_nav_block.clear()
 	_environment()
 	_floors()
 	_walls()
 	_cover()
 	_door_panels()
 	_labels()
+	_setup_nav()
 
 
-func bake_now() -> void:
-	bake_navigation_mesh()
+func _setup_nav() -> void:
+	var region := NavigationRegion3D.new()
+	region.name = "Nav"
+	var nmesh := NavigationMesh.new()
+	nmesh.agent_radius = 0.42
+	nmesh.agent_height = 1.6
+	nmesh.agent_max_climb = 0.15
+	nmesh.agent_max_slope = 45.0
+	nmesh.cell_size = 0.15
+	nmesh.cell_height = 0.15
+	nmesh.border_size = 0.0
+	var src := NavigationMeshSourceGeometryData3D.new()
+	for item in _nav_walk:
+		var c: Vector3 = item["c"]
+		var s: Vector3 = item["s"]
+		var y: float = c.y + s.y * 0.5
+		var hx := s.x * 0.5
+		var hz := s.z * 0.5
+		var p0 := Vector3(c.x - hx, y, c.z - hz)
+		var p1 := Vector3(c.x + hx, y, c.z - hz)
+		var p2 := Vector3(c.x + hx, y, c.z + hz)
+		var p3 := Vector3(c.x - hx, y, c.z + hz)
+		src.add_faces(PackedVector3Array([p0, p1, p2, p0, p2, p3]), Transform3D.IDENTITY)
+	for item in _nav_block:
+		var c: Vector3 = item["c"]
+		var s: Vector3 = item["s"]
+		var hx := s.x * 0.5 + 0.08
+		var hz := s.z * 0.5 + 0.08
+		var verts := PackedVector3Array([
+			Vector3(c.x - hx, 0.0, c.z - hz),
+			Vector3(c.x + hx, 0.0, c.z - hz),
+			Vector3(c.x + hx, 0.0, c.z + hz),
+			Vector3(c.x - hx, 0.0, c.z + hz)
+		])
+		src.add_projected_obstruction(verts, 0.0, 3.0, true)
+	NavigationServer3D.bake_from_source_geometry_data(nmesh, src, Callable())
+	nav_poly_count = nmesh.get_polygon_count()
+	region.navigation_mesh = nmesh
+	add_child(region)
 
 
 func _environment() -> void:
@@ -129,6 +163,11 @@ func _labels() -> void:
 	markers["central"] = Vector3(3.0, 0, 18.0)
 	markers["exit"] = Vector3(13.6, 0, 25.8)
 	markers["corridor"] = Vector3(0, 0, 9.5)
+	markers["central_north"] = Vector3(0.0, 0, 20.6)
+	markers["north_hall"] = Vector3(0.15, 0, 23.4)
+	markers["room_a_north"] = Vector3(-8.1, 0, 23.4)
+	markers["room_a_flank"] = Vector3(-8.6, 0, 20.1)
+	markers["room_b_north"] = Vector3(13.6, 0, 23.4)
 
 
 func spawn_mannequin(at: Vector3, color: Color, label: String) -> MeshInstance3D:
@@ -167,6 +206,10 @@ func _box(center: Vector3, size: Vector3, color: Color, node_name: String) -> St
 	mi.material_override = mat
 	body.add_child(mi)
 	add_child(body)
+	if node_name.begins_with("floor_"):
+		_nav_walk.append({"c": center, "s": size})
+	elif not node_name.begins_with("door_"):
+		_nav_block.append({"c": center, "s": size})
 	return body
 
 

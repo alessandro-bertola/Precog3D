@@ -71,9 +71,17 @@ func all_facts() -> Array:
 func knows_hostile_in(room: String) -> bool:
 	for f in _facts.values():
 		var fact := f as Fact
-		if fact.room_hint == room and fact.source != "none":
+		if fact.room_hint == room and fact.id.begins_with("Criminal"):
 			return true
 	return false
+
+
+func last_pos_in(room: String) -> Vector3:
+	for f in _facts.values():
+		var fact := f as Fact
+		if fact.room_hint == room and fact.id.begins_with("Criminal"):
+			return fact.last_pos
+	return Vector3.INF
 
 
 func debug_lines() -> String:

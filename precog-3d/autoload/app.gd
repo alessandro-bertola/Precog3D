@@ -12,4 +12,6 @@ func go_test() -> void:
 
 
 func go_level() -> void:
-	get_tree().change_scene_to_file(Conventions.SCENE_LEVEL)
+	var err := get_tree().change_scene_to_file(Conventions.SCENE_LEVEL)
+	if err != OK:
+		push_error("Failed to open Level 1: %s" % err)

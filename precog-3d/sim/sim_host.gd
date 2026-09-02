@@ -8,15 +8,17 @@ signal budget_changed(value: int)
 
 enum Mode { PRESENT, PROJECTION, EXECUTION }
 
-var running: bool = true
+var running: bool = false
 var mode: Mode = Mode.PRESENT
 var sim_time: float = 0.0
 var horizon: float = 45.0
+var horizon_step: float = 45.0
 var budget: int = 3
 var budget_max: int = 3
 var projection_index: int = 0
 var last_outcome: String = ""
 var geometry: LevelGeometry
+var actors: Node3D
 var _sounds: Array = []
 var _timeline: Array = []
 var _prev_timeline: Array = []
@@ -32,8 +34,9 @@ func _ready() -> void:
 	add_child(sfx)
 
 
-func setup(geo: LevelGeometry) -> void:
+func setup(geo: LevelGeometry, spawn_parent: Node3D) -> void:
 	geometry = geo
+	actors = spawn_parent
 	_seed_rng()
 	_replace_door_panels()
 	_spawn_cast()
@@ -69,22 +72,36 @@ func _process(delta: float) -> void:
 	sim_time += delta
 	_trim_sounds()
 	if mode == Mode.PROJECTION and sim_time >= horizon:
-		stop_projection(false)
+		running = false
+		log_event("horizon", "Horizon reached. Continue future or return.", "")
+		mode_changed.emit(mode_name())
 	_check_mission()
 
 
 func start_projection() -> void:
 	if mode == Mode.EXECUTION:
 		return
+	if mode == Mode.PROJECTION:
+		if running:
+			return
+		horizon = sim_time + horizon_step
+		running = true
+		log_event("projection_start", "Continue to T+%.0fs" % horizon, "")
+		mode_changed.emit(mode_name())
+		return
+	if running:
+		running = false
+		capture_snapshot()
 	restore_snapshot()
 	_prev_timeline = _timeline.duplicate(true)
 	_timeline.clear()
-	sim_time = 0.0
+	horizon = sim_time + horizon_step
 	running = true
 	mode = Mode.PROJECTION
 	projection_index += 1
+	last_outcome = ""
 	_tint(Color(0.55, 0.75, 1.0))
-	log_event("projection_start", "Projection %d" % projection_index, "")
+	log_event("projection_start", "Projection %d from T+%.1fs" % [projection_index, sim_time], "")
 	mode_changed.emit(mode_name())
 
 
@@ -100,15 +117,40 @@ func stop_projection(interrupted: bool) -> void:
 	mode_changed.emit(mode_name())
 
 
+func play_present() -> void:
+	if mode != Mode.PRESENT:
+		return
+	running = true
+	last_outcome = ""
+	log_event("present", "Present time flowing", "")
+	mode_changed.emit(mode_name())
+
+
+func pause_present() -> void:
+	if mode != Mode.PRESENT:
+		return
+	if not running:
+		return
+	running = false
+	capture_snapshot()
+	log_event("present", "Present paused at T+%.1fs" % sim_time, "")
+	mode_changed.emit(mode_name())
+
+
 func start_execution() -> void:
 	if committed:
 		return
+	if mode == Mode.PROJECTION:
+		stop_projection(true)
+	if mode == Mode.PRESENT and running:
+		running = false
+		capture_snapshot()
 	restore_snapshot()
 	_timeline.clear()
-	sim_time = 0.0
 	running = true
 	mode = Mode.EXECUTION
 	committed = true
+	horizon = sim_time + 90.0
 	_tint(Color(1.0, 0.72, 0.55))
 	log_event("execution", "Real operation started", "")
 	mode_changed.emit(mode_name())
@@ -123,7 +165,7 @@ func capture_snapshot() -> void:
 	for d in get_tree().get_nodes_in_group(Conventions.GROUP_DOORS):
 		if d is Door:
 			doors[d.name] = (d as Door).is_open
-	_snapshot = {"pawns": pawns, "doors": doors, "budget": budget}
+	_snapshot = {"pawns": pawns, "doors": doors, "budget": budget, "sim_time": sim_time, "outcome": last_outcome}
 
 
 func restore_snapshot() -> void:
@@ -137,14 +179,18 @@ func restore_snapshot() -> void:
 				pawn.apply_snapshot(_snapshot["pawns"][pawn.display_name])
 	for d in get_tree().get_nodes_in_group(Conventions.GROUP_DOORS):
 		if d is Door and _snapshot["doors"].has(d.name):
-			(d as Door)._set_open_instant(_snapshot["doors"][d.name])
-	sim_time = 0.0
+			(d as Door).abort_and_set(_snapshot["doors"][d.name])
+	if _snapshot.has("sim_time"):
+		sim_time = float(_snapshot["sim_time"])
+	if _snapshot.has("outcome"):
+		last_outcome = str(_snapshot["outcome"])
 	_sounds.clear()
 
 
-func emit_sound(pos: Vector3, radius: float, kind: String, src: String) -> void:
+func emit_sound(pos: Vector3, radius: float, kind: String, src: String, write_log: bool = true) -> void:
 	_sounds.append({"pos": pos, "radius": radius, "kind": kind, "src": src, "t": sim_time})
-	log_event(kind, "%s %s" % [src, kind], src)
+	if write_log:
+		log_event(kind, "%s %s" % [src, kind], src)
 	if kind == "gunshot" and has_node("Sfx"):
 		get_node("Sfx").play_gunshot()
 
@@ -156,7 +202,7 @@ func recent_sounds() -> Array:
 func _trim_sounds() -> void:
 	var keep: Array = []
 	for s in _sounds:
-		if sim_time - float(s.t) < 0.35:
+		if sim_time - float(s["t"]) < 0.35:
 			keep.append(s)
 	_sounds = keep
 
@@ -179,6 +225,9 @@ func apply_precog(kind: String, target_name: String) -> bool:
 	var cost := _cost(kind)
 	if cost > budget or mode != Mode.PRESENT:
 		return false
+	if running:
+		running = false
+		capture_snapshot()
 	var pawn := _pawn(target_name)
 	if pawn == null:
 		return false
@@ -188,9 +237,15 @@ func apply_precog(kind: String, target_name: String) -> bool:
 		"hostile_room_a":
 			pawn.knowledge.precog("Criminal1", marker("room_a"), sim_time, "room_a")
 			log_event("precog", "%s: hostile in Room A" % target_name, target_name)
+		"hostile_room_b":
+			pawn.knowledge.precog("Criminal2", marker("room_b"), sim_time, "room_b")
+			log_event("precog", "%s: hostile in Room B" % target_name, target_name)
 		"position":
 			pawn.knowledge.precog("Criminal1", marker("room_a") + Vector3(1.4, 0, -1.2), sim_time, "room_a")
-			log_event("precog", "%s: precise hostile position" % target_name, target_name)
+			log_event("precog", "%s: precise Criminal1 position" % target_name, target_name)
+		"position_b":
+			pawn.knowledge.precog("Criminal2", marker("room_b") + Vector3(0.4, 0, 0.6), sim_time, "room_b")
+			log_event("precog", "%s: precise Criminal2 position" % target_name, target_name)
 		"cautious":
 			pawn.stance = Pawn.Stance.CAUTIOUS
 			pawn.caution = 0.9
@@ -215,6 +270,8 @@ func _cost(kind: String) -> int:
 	match kind:
 		"position":
 			return 2
+		"position_b":
+			return 2
 		_:
 			return 1
 
@@ -234,27 +291,39 @@ func prev_timeline() -> Array:
 
 
 func _replace_door_panels() -> void:
-	if geometry.has_node("door_a_panel"):
-		geometry.get_node("door_a_panel").queue_free()
-	if geometry.has_node("door_b_panel"):
-		geometry.get_node("door_b_panel").queue_free()
+	if geometry.get_node_or_null("door_a_panel"):
+		geometry.get_node("door_a_panel").free()
+	if geometry.get_node_or_null("door_b_panel"):
+		geometry.get_node("door_b_panel").free()
 	var a := Door.new()
 	a.name = "DoorA"
-	a.global_position = marker("door_a")
-	geometry.add_child(a)
+	actors.add_child(a)
+	a.global_position = marker("door_a") + Vector3(0.0, 0.0, -0.85)
+	a.opened.connect(func(): log_event("door", "Door A opened", ""))
 	var b := Door.new()
 	b.name = "DoorB"
-	b.global_position = marker("door_b")
-	geometry.add_child(b)
+	actors.add_child(b)
+	b.global_position = marker("door_b") + Vector3(0.0, 0.0, -0.85)
+	b.opened.connect(func(): log_event("door", "Door B opened", ""))
 
 
 func _spawn_cast() -> void:
 	_mk(Conventions.AGENT_A, Pawn.Faction.AGENT, marker("entrance") + Vector3(-0.7, 0, 0), 0.75, marker("room_a"), "reach_room_a")
 	_mk(Conventions.AGENT_B, Pawn.Faction.AGENT, marker("entrance") + Vector3(0.7, 0, 0), 0.35, marker("room_a") + Vector3(1.2, 0, 0), "reach_room_a")
-	var c1 := _mk(Conventions.CRIMINAL_1, Pawn.Faction.CRIMINAL, marker("room_a") + Vector3(1.5, 0, -1.4), 0.4, marker("door_a"), "guard_door")
-	c1.look_at(Vector3(marker("door_a").x, c1.global_position.y, marker("door_a").z), Vector3.UP)
-	_mk(Conventions.CRIMINAL_2, Pawn.Faction.CRIMINAL, marker("room_b") + Vector3(0.4, 0, 0.6), 0.4, marker("room_b"), "hold")
-	_mk(Conventions.CIVILIAN, Pawn.Faction.CIVILIAN, marker("room_a") + Vector3(-2.4, 0, 1.6), 0.8, marker("room_a") + Vector3(-2.4, 0, 1.6), "wait")
+	var c1 := _mk(Conventions.CRIMINAL_1, Pawn.Faction.CRIMINAL, marker("room_a") + Vector3(1.5, 0, -1.4), 0.4, Vector3.INF, "patrol")
+	c1.setup_patrol([
+		marker("room_a") + Vector3(2.2, 0, -0.2),
+		marker("room_a") + Vector3(-2.1, 0, -2.1),
+		marker("room_a") + Vector3(-2.1, 0, 0.4),
+		marker("room_a") + Vector3(1.4, 0, 1.2)
+	], marker("door_a"))
+	var c2 := _mk(Conventions.CRIMINAL_2, Pawn.Faction.CRIMINAL, marker("room_b") + Vector3(0.4, 0, 0.6), 0.4, Vector3.INF, "patrol")
+	c2.setup_patrol([
+		marker("room_b") + Vector3(-0.6, 0, -1.4),
+		marker("room_b") + Vector3(1.4, 0, 0.2),
+		marker("room_b") + Vector3(-0.4, 0, 1.6)
+	], marker("door_b"))
+	_mk(Conventions.CIVILIAN, Pawn.Faction.CIVILIAN, marker("room_a") + Vector3(-2.6, 0, -2.0), 0.8, marker("room_a") + Vector3(-2.6, 0, -2.0), "wait")
 	var a_pawn := _pawn(Conventions.AGENT_A)
 	if a_pawn:
 		a_pawn.stance = Pawn.Stance.CAUTIOUS
@@ -269,7 +338,7 @@ func _mk(n: String, fac: Pawn.Faction, pos: Vector3, caut: float, goal: Vector3,
 	p.faction = fac
 	p.caution = caut
 	p.name = n
-	geometry.add_child(p)
+	actors.add_child(p)
 	p.global_position = pos + Vector3(0, 0.05, 0)
 	p.set_goal(goal, goal_text)
 	return p
@@ -283,24 +352,38 @@ func _pawn(n: String) -> Pawn:
 
 
 func _check_mission() -> void:
-	if mode != Mode.EXECUTION and mode != Mode.PROJECTION:
+	if mode == Mode.PRESENT and not running:
+		return
+	if mode != Mode.EXECUTION and mode != Mode.PROJECTION and mode != Mode.PRESENT:
 		return
 	var civ := _pawn(Conventions.CIVILIAN)
 	var a := _pawn(Conventions.AGENT_A)
 	var b := _pawn(Conventions.AGENT_B)
-	var c1 := _pawn(Conventions.CRIMINAL_1)
 	if civ and civ.downed:
 		last_outcome = "FAIL civilian"
 		if mode == Mode.EXECUTION:
 			running = false
-	elif a and b and a.downed and b.downed:
+		return
+	if a and b and a.downed and b.downed:
 		last_outcome = "FAIL team down"
 		if mode == Mode.EXECUTION:
 			running = false
-	elif c1 and c1.downed and civ and not civ.downed:
+		return
+	if _all_criminals_down() and civ and not civ.downed:
 		last_outcome = "SUCCESS"
-		if mode == Mode.EXECUTION and sim_time > 8.0:
+		if mode == Mode.EXECUTION:
 			running = false
+
+
+func _all_criminals_down() -> bool:
+	var any := false
+	for p in get_tree().get_nodes_in_group(Conventions.GROUP_CRIMINALS):
+		if not (p is Pawn):
+			continue
+		any = true
+		if not (p as Pawn).downed:
+			return false
+	return any
 
 
 func select_pawn_at_mouse() -> void:

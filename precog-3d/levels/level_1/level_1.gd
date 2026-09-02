@@ -18,11 +18,13 @@ func _ready() -> void:
 
 
 func _start_sim() -> void:
-	geometry.bake_navigation_mesh(false)
+	var actors := Node3D.new()
+	actors.name = "Actors"
+	add_child(actors)
 	sim = SimHost.new()
 	sim.name = "Sim"
 	add_child(sim)
-	sim.setup(geometry)
+	sim.setup(geometry, actors)
 	var hud := GameHud.new()
 	hud.name = "HUD"
 	add_child(hud)

@@ -9,6 +9,7 @@ func _build_ui() -> void:
 	var bg := ColorRect.new()
 	bg.color = Color(0.06, 0.07, 0.09, 1)
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(bg)
 
 	var box := VBoxContainer.new()
