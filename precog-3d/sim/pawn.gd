@@ -367,15 +367,17 @@ func _hold_on_civilian() -> void:
 
 
 func _should_flee() -> bool:
+	if _is_grouped():
+		return false
+	return anxiety >= 0.6
+
+
+func _is_grouped() -> bool:
 	if role == Role.HOLDER:
 		var civ := _find_named(hold_name) if hold_name != "" else _find_named(Conventions.CIVILIAN)
 		if civ and not civ.downed:
-			return false
-	if role == Role.POSTED and _has_living_partner():
-		return false
-	if anxiety < 0.6:
-		return false
-	return not _has_living_partner()
+			return true
+	return _has_living_partner()
 
 
 func _is_held() -> bool:
